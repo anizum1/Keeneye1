@@ -1,0 +1,21 @@
+# The signing key for session cookies, generated on first run.
+.env
+
+# Workspaces: evidence vaults and their databases never belong in git.
+workspace/
+workspace-*/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+vault/
+
+# Generated reports
+keeneye-*-report.pdf
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/

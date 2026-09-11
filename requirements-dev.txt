@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest>=8.0
+ruff>=0.6
+# Drives the real 3D interface in Chromium. tests/test_browser.py skips itself
+# when this or a browser binary is missing.
+playwright>=1.40

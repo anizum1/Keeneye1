@@ -1,0 +1,5 @@
+# Runtime. Deliberately short: everything else is the Python standard library,
+# and three.js is vendored under coc/web/static/vendor so the application runs
+# with no network access at all.
+flask>=3.0
+reportlab>=4.0

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en" data-tool="{{ tool }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>{{ tool }} — Chain of Custody</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/keeneye.css') }}">
+
+<!--
+  three.js is vendored under static/vendor/three so the application runs with
+  no network access at all.  The import map exists because three's addons
+  import the bare specifier 'three'; it carries the request nonce so the
+  Content-Security-Policy can stay script-src 'self' with no 'unsafe-inline'.
+-->
+<script type="importmap" nonce="{{ nonce }}">
+{
+  "imports": {
+    "three": "{{ url_for('static', filename='vendor/three/build/three.module.js') }}",
+    "three/addons/": "{{ url_for('static', filename='vendor/three/examples/jsm/') }}"
+  }
+}
+</script>
+</head>
+<body data-version="{{ version }}">
+
+<canvas id="stage" aria-hidden="true"></canvas>
+<div id="labels" aria-hidden="true"></div>
+
+<!-- The boot curtain. Removed once the first frame has actually rendered. -->
+<div id="curtain" role="status" aria-live="polite">
+  <div class="curtain-mark">{{ tool }}</div>
+  <div class="curtain-bar"><span></span></div>
+  <div class="curtain-note">initialising evidence vault</div>
+</div>
+
+<!--
+  Everything below is ordinary DOM sitting above the WebGL canvas.  Text lives
+  here rather than in the 3D scene so that hashes stay selectable and the whole
+  interface remains reachable by a screen reader.
+-->
+<main id="ui" hidden>
+
+  <header id="rail">
+    <div class="mark" aria-hidden="true"><span class="mark-eye"></span>{{ tool }}</div>
+    <nav id="nav" aria-label="Sections">
+      <button type="button" data-goto="vault"  class="nav-btn" aria-current="true">Vault</button>
+      <button type="button" data-goto="forge"  class="nav-btn">Intake</button>
+      <button type="button" data-goto="web"    class="nav-btn">Case web</button>
+      <button type="button" data-goto="ledger" class="nav-btn">Ledger</button>
+      <button type="button" data-goto="seal"   class="nav-btn">Report</button>
+    </nav>
+    <div class="rail-end">
+      <button type="button" id="toggle-flat" class="ghost" title="Switch to a plain, high-contrast view">Evidence mode</button>
+      <span id="whoami" class="whoami"></span>
+      <button type="button" id="sign-out" class="ghost">Sign out</button>
+    </div>
+  </header>
+
+  <section id="panel" class="panel" hidden aria-live="polite"></section>
+
+  <aside id="chainstatus" class="chip" hidden>
+    <span class="chip-dot"></span><span class="chip-text">chain</span>
+  </aside>
+
+  <div id="toasts" aria-live="assertive"></div>
+</main>
+
+<!-- The login scene's controls. Real inputs, positioned over the 3D lock. -->
+<form id="gate" class="gate" hidden autocomplete="off">
+  <h1 class="gate-title">{{ tool }}</h1>
+  <p class="gate-sub">Digital evidence chain of custody</p>
+  <label class="field">
+    <span>Examiner</span>
+    <input type="text" name="username" id="gate-user" autocomplete="username" required spellcheck="false">
+  </label>
+  <label class="field">
+    <span>Access key</span>
+    <input type="password" name="access_key" id="gate-key" autocomplete="current-password" required spellcheck="false"
+           placeholder="paste your key">
+  </label>
+  <p class="gate-hint">The key's cut is derived from what you type. Nothing is sent until you turn it.</p>
+  <button type="submit" class="turn" id="gate-turn">Turn key</button>
+  <p class="gate-error" id="gate-error" role="alert" hidden></p>
+</form>
+
+<noscript>
+  <div class="noscript">
+    {{ tool }} needs JavaScript to render the evidence vault.
+    The command-line interface (<code>python -m coc</code>) provides the same functions without a browser.
+  </div>
+</noscript>
+
+<script type="module" src="{{ url_for('static', filename='js/boot.js') }}"></script>
+</body>
+</html>
