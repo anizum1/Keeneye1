@@ -1,0 +1,720 @@
+<title>Inside KEENEYE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+  /* Light is the base set. Every token is declared here so no colour exists
+     only inside a media query. */
+  :root {
+    --ground:    #eceff4;
+    --surface:   #f7f9fc;
+    --sunken:    #e2e7ef;
+    --ink:       #0d1424;
+    --ink-soft:  #46536b;
+    --ink-faint: #75809a;
+    --rule:      #c8d0de;
+
+    --cyan:      #036c8a;
+    --gold:      #8a5b00;
+    --green:     #0a6b3d;
+    --crimson:   #a01223;
+    --violet:    #5b32a8;
+
+    --seal:      #8a5b00;
+    --shadow:    0 1px 2px rgba(13, 20, 36, .06), 0 8px 24px rgba(13, 20, 36, .05);
+
+    --serif: "IBM Plex Serif", Georgia, serif;
+    --sans:  "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    --mono:  "IBM Plex Mono", ui-monospace, Menlo, monospace;
+
+    color-scheme: light dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:    #050810;
+      --surface:   #0b1220;
+      --sunken:    #070d18;
+      --ink:       #dfe7f5;
+      --ink-soft:  #97a5c0;
+      --ink-faint: #6b7a9c;
+      --rule:      #1e2a42;
+
+      --cyan:      #4fe0ff;
+      --gold:      #ffb300;
+      --green:     #00ff9d;
+      --crimson:   #ff5c7a;
+      --violet:    #a97bff;
+
+      --seal:      #ffb300;
+      --shadow:    0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px rgba(0, 0, 0, .45);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:    #050810;
+    --surface:   #0b1220;
+    --sunken:    #070d18;
+    --ink:       #dfe7f5;
+    --ink-soft:  #97a5c0;
+    --ink-faint: #6b7a9c;
+    --rule:      #1e2a42;
+
+    --cyan:      #4fe0ff;
+    --gold:      #ffb300;
+    --green:     #00ff9d;
+    --crimson:   #ff5c7a;
+    --violet:    #a97bff;
+
+    --seal:      #ffb300;
+    --shadow:    0 1px 2px rgba(0, 0, 0, .5), 0 10px 30px rgba(0, 0, 0, .45);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 56px 96px;
+    display: grid;
+    gap: 56px;
+  }
+
+  h1, h2, h3 { font-family: var(--serif); text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(2rem, 5vw, 2.9rem); font-weight: 600; line-height: 1.12; letter-spacing: -.015em; }
+  h2 { font-size: clamp(1.3rem, 3vw, 1.6rem); font-weight: 600; letter-spacing: -.01em; }
+  h3 { font-size: 1.02rem; font-weight: 600; }
+  p  { margin: 0; max-width: 66ch; }
+
+  code, .mono { font-family: var(--mono); font-size: .86em; }
+  code { color: var(--cyan); overflow-wrap: anywhere; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: .7rem;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+
+  /* ---------- masthead ---------- */
+
+  header { display: grid; gap: 16px; }
+  header .lede { font-size: 1.08rem; color: var(--ink-soft); max-width: 60ch; }
+
+  .stamp {
+    justify-self: start;
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 14px;
+    border: 1px solid var(--seal);
+    border-radius: 2px;
+    color: var(--seal);
+    font-family: var(--mono);
+    font-size: .68rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }
+  .stamp::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--seal); flex: none;
+  }
+
+  section { display: grid; gap: 22px; }
+  .section-head { display: grid; gap: 8px; }
+
+  /* ---------- figures ---------- */
+
+  figure {
+    margin: 0;
+    display: grid;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 22px;
+    box-shadow: var(--shadow);
+  }
+  .figure-scroll { overflow-x: auto; }
+  figure svg { display: block; max-width: 100%; height: auto; color: var(--ink-soft); }
+  figcaption { font-size: .87rem; color: var(--ink-soft); max-width: 62ch; }
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- the intake sequence ---------- */
+
+  .sequence { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+
+  .step {
+    display: grid;
+    grid-template-columns: 2.6rem 1fr;
+    gap: 0 18px;
+    padding-block: 22px;
+    border-top: 1px solid var(--rule);
+  }
+  .step:last-child { border-bottom: 1px solid var(--rule); }
+
+  .step-n {
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--seal);
+    padding-top: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .step-body { display: grid; gap: 12px; min-width: 0; }
+  .step-body > p { color: var(--ink-soft); font-size: .95rem; }
+
+  /* Each step's two consequences, side by side. */
+  .consequences { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule); }
+  .consequence { background: var(--sunken); padding: 12px 14px; display: grid; gap: 5px; min-width: 0; }
+  .consequence .eyebrow { font-size: .62rem; letter-spacing: .16em; }
+  .consequence p { font-size: .84rem; margin: 0; color: var(--ink); }
+  .consequence.none p { color: var(--ink-faint); font-style: italic; }
+
+  /* ---------- panels ---------- */
+
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 18px; }
+  .panel {
+    display: grid; gap: 9px; align-content: start;
+    padding: 18px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--stripe, var(--rule));
+    border-radius: 2px;
+  }
+  .panel p { font-size: .88rem; color: var(--ink-soft); }
+  .panel .catches { font-family: var(--mono); font-size: .7rem; letter-spacing: .1em;
+                    text-transform: uppercase; color: var(--stripe, var(--ink-faint)); }
+  .panel.disk    { --stripe: var(--gold); }
+  .panel.chain   { --stripe: var(--green); }
+  .panel.trigger { --stripe: var(--cyan); }
+
+  /* ---------- limits ---------- */
+
+  .limits { display: grid; gap: 0; border: 1px solid var(--crimson); border-radius: 3px; overflow: hidden; }
+  .limits > li { list-style: none; padding: 14px 16px; display: grid; gap: 4px; border-top: 1px solid var(--rule); }
+  .limits > li:first-child { border-top: 0; }
+  .limits b { font-weight: 600; font-size: .93rem; }
+  .limits span { font-size: .86rem; color: var(--ink-soft); }
+  .limits-head {
+    padding: 12px 16px; background: var(--crimson);
+    color: var(--surface); font-family: var(--mono); font-size: .7rem;
+    letter-spacing: .18em; text-transform: uppercase;
+  }
+  :root[data-theme="dark"] .limits-head,
+  :root:not([data-theme="light"]) .limits-head { color: #170208; }
+
+  /* ---------- footer ---------- */
+
+  footer { border-top: 1px solid var(--rule); padding-top: 20px; }
+  footer p { font-size: .84rem; color: var(--ink-faint); }
+
+  @media (max-width: 34rem) {
+    .step { grid-template-columns: 1fr; gap: 10px; }
+    .consequences { grid-template-columns: 1fr; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  }
+</style>
+
+<div class="page">
+
+  <header>
+    <div class="stamp">Chain of custody &middot; how it works</div>
+    <h1>Inside KEENEYE</h1>
+    <p class="lede">
+      What actually happens between dropping a file on the page and it sitting sealed in the vault —
+      and how the tool can later tell whether anything changed.
+    </p>
+  </header>
+
+  <!-- ============ one engine ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">01 &mdash; Shape</span>
+      <h2>Two front doors, one engine</h2>
+      <p>
+        The 3D interface and the command line are not two applications. Both call the same service
+        layer, and nothing else is allowed to write. That is why an action taken in a terminal shows
+        up in the ledger in the browser — there is only ever one log.
+      </p>
+    </div>
+
+    <figure>
+      <div class="figure-scroll">
+        <svg viewBox="0 0 760 268" role="img"
+             aria-label="The browser and the command line both call the Workspace service layer, which is the only thing that writes to the vault on disk and the SQLite database.">
+          <defs>
+            <marker id="a-head" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="currentColor"></polygon>
+            </marker>
+            <marker id="a-gold" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="var(--gold)"></polygon>
+            </marker>
+          </defs>
+
+          <!-- front doors -->
+          <rect x="14" y="26" width="184" height="58" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+          <text x="30" y="51" font-family="IBM Plex Sans" font-size="13" font-weight="600" fill="currentColor">Browser</text>
+          <text x="30" y="69" font-family="IBM Plex Mono" font-size="10.5" fill="currentColor" opacity=".75">3D interface</text>
+
+          <rect x="14" y="152" width="184" height="58" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+          <text x="30" y="177" font-family="IBM Plex Sans" font-size="13" font-weight="600" fill="currentColor">Terminal</text>
+          <text x="30" y="195" font-family="IBM Plex Mono" font-size="10.5" fill="currentColor" opacity=".75">python -m coc</text>
+
+          <!-- api -->
+          <rect x="246" y="26" width="150" height="58" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+          <text x="262" y="51" font-family="IBM Plex Sans" font-size="13" font-weight="600" fill="currentColor">JSON API</text>
+          <text x="262" y="69" font-family="IBM Plex Mono" font-size="10.5" fill="currentColor" opacity=".75">Flask</text>
+
+          <line x1="198" y1="55" x2="240" y2="55" stroke="currentColor" stroke-width="1.2" marker-end="url(#a-head)"></line>
+          <text x="204" y="46" font-family="IBM Plex Mono" font-size="9.5" fill="currentColor" opacity=".7">HTTP</text>
+
+          <!-- the only write path -->
+          <rect x="444" y="80" width="176" height="76" rx="2" fill="none" stroke="var(--gold)" stroke-width="2"></rect>
+          <text x="462" y="108" font-family="IBM Plex Sans" font-size="13" font-weight="600" fill="var(--gold)">Workspace</text>
+          <text x="462" y="126" font-family="IBM Plex Mono" font-size="9.5" fill="var(--gold)">coc/service.py</text>
+          <text x="462" y="142" font-family="IBM Plex Mono" font-size="9.5" fill="var(--gold)">the only write path</text>
+
+          <line x1="396" y1="55" x2="438" y2="104" stroke="currentColor" stroke-width="1.2" marker-end="url(#a-head)"></line>
+          <line x1="198" y1="181" x2="438" y2="132" stroke="currentColor" stroke-width="1.2" marker-end="url(#a-head)"></line>
+
+          <!-- stores -->
+          <rect x="666" y="26" width="80" height="58" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+          <text x="682" y="50" font-family="IBM Plex Sans" font-size="12" font-weight="600" fill="currentColor">Vault</text>
+          <text x="682" y="67" font-family="IBM Plex Mono" font-size="9.5" fill="currentColor" opacity=".75">bytes</text>
+
+          <rect x="666" y="152" width="80" height="58" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+          <text x="682" y="176" font-family="IBM Plex Sans" font-size="12" font-weight="600" fill="currentColor">SQLite</text>
+          <text x="682" y="193" font-family="IBM Plex Mono" font-size="9.5" fill="currentColor" opacity=".75">records</text>
+
+          <line x1="620" y1="104" x2="660" y2="66" stroke="var(--gold)" stroke-width="1.4" marker-end="url(#a-gold)"></line>
+          <line x1="620" y1="132" x2="660" y2="168" stroke="var(--gold)" stroke-width="1.4" marker-end="url(#a-gold)"></line>
+
+          <text x="444" y="196" font-family="IBM Plex Mono" font-size="9.5" fill="var(--gold)">one transaction, both or neither</text>
+          <path d="M 604 160 L 604 186 L 448 186" fill="none" stroke="var(--gold)" stroke-width="1" stroke-dasharray="3 3"></path>
+
+          <text x="14" y="246" font-family="IBM Plex Mono" font-size="9.5" fill="currentColor" opacity=".6">
+            Everything above runs on one machine. Nothing leaves it.
+          </text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Both front doors converge before anything is written.</b> A route, a CLI command or a
+        future feature cannot reach the database on its own — which is what guarantees no change
+        exists without a record of who made it.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ intake ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">02 &mdash; Sequence</span>
+      <h2>Admitting a file, step by step</h2>
+      <p>
+        Six steps run every time, whether the file arrives by drag-and-drop or by
+        <code>coc import</code>. Each one has two consequences worth separating: what lands on disk,
+        and what lands in the database.
+      </p>
+    </div>
+
+    <ol class="sequence">
+      <li class="step">
+        <div class="step-n">01</div>
+        <div class="step-body">
+          <h3>The file arrives</h3>
+          <p>Dropped on the page, chosen in the intake form, or named as a path on the command line.</p>
+          <div class="consequences">
+            <div class="consequence none"><span class="eyebrow">On disk</span><p>Nothing yet</p></div>
+            <div class="consequence none"><span class="eyebrow">In the database</span><p>Nothing yet</p></div>
+          </div>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-n">02</div>
+        <div class="step-body">
+          <h3>Its own timestamps are read first</h3>
+          <p>
+            Before anything is copied, because the vault copy immediately has times of its own.
+            From the filesystem on the CLI path, from <code>File.lastModified</code> in the browser —
+            recorded as a claim by the source, never as proof.
+          </p>
+          <div class="consequences">
+            <div class="consequence none"><span class="eyebrow">On disk</span><p>Nothing yet</p></div>
+            <div class="consequence"><span class="eyebrow">In the database</span><p>Held for step 5</p></div>
+          </div>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-n">03</div>
+        <div class="step-body">
+          <h3>Hashed while it streams</h3>
+          <p>
+            The bytes are written to a staging file and hashed in the same pass, a chunk at a time —
+            so a hundred-gigabyte image is never held in memory. SHA-256 is authoritative; SHA-1 is
+            kept alongside only for reading older case files.
+          </p>
+          <div class="consequences">
+            <div class="consequence"><span class="eyebrow">On disk</span><p>A temporary file in <code>vault/.staging</code></p></div>
+            <div class="consequence none"><span class="eyebrow">In the database</span><p>Nothing yet</p></div>
+          </div>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-n">04</div>
+        <div class="step-body">
+          <h3>Sealed at its own address</h3>
+          <p>
+            Moved atomically to a path derived from its digest, then made read-only. The path
+            <em>is</em> the integrity claim: a file cannot sit at the wrong address. Identical content
+            is stored once. The original filename never becomes a path component, so a hostile name
+            cannot steer where anything is written.
+          </p>
+          <div class="consequences">
+            <div class="consequence">
+              <span class="eyebrow">On disk</span>
+              <p><code>vault/sha256/65/c2/65c23cac…e399</code> &mdash; mode <code>0444</code></p>
+            </div>
+            <div class="consequence none"><span class="eyebrow">In the database</span><p>Nothing yet</p></div>
+          </div>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-n">05</div>
+        <div class="step-body">
+          <h3>The row and the log entry land together</h3>
+          <p>
+            One <code>BEGIN IMMEDIATE</code> transaction inserts the evidence record and appends the
+            custody entry. Both land or neither does. This is the step everything else rests on: there
+            is no ordering of failures that leaves a file recorded but unattributed.
+          </p>
+          <div class="consequences">
+            <div class="consequence none"><span class="eyebrow">On disk</span><p>Unchanged &mdash; already sealed</p></div>
+            <div class="consequence">
+              <span class="eyebrow">In the database</span>
+              <p>Evidence row <b>+</b> <code>evidence_ingested</code> entry, hash-linked to the one before</p>
+            </div>
+          </div>
+        </div>
+      </li>
+
+      <li class="step">
+        <div class="step-n">06</div>
+        <div class="step-body">
+          <h3>It shows up as sealed</h3>
+          <p>
+            The slab flies into a cell in the vault wall and the lock seats; the command line prints
+            the digest. Both are reporting the same committed fact.
+          </p>
+          <div class="consequences">
+            <div class="consequence none"><span class="eyebrow">On disk</span><p>Unchanged</p></div>
+            <div class="consequence none"><span class="eyebrow">In the database</span><p>Unchanged</p></div>
+          </div>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============ the chain ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">03 &mdash; Mechanism</span>
+      <h2>Why an edited log gives itself away</h2>
+      <p>
+        Every entry's hash is computed over its own contents <em>and</em> the hash of the entry before
+        it. Change a historical entry and its contents no longer hash to the value the log recorded —
+        at a position the tool can name.
+      </p>
+    </div>
+
+    <figure>
+      <div class="figure-scroll">
+        <svg viewBox="0 0 760 298" role="img"
+             aria-label="Four chained log entries. Each entry's hash covers its own fields plus the previous entry's hash. When entry three is edited, its contents hash to a different value than the one recorded, and verification reports the break at entry three.">
+          <defs>
+            <marker id="c-head" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="currentColor"></polygon>
+            </marker>
+          </defs>
+
+          <text x="0" y="14" font-family="IBM Plex Mono" font-size="10" fill="var(--green)" letter-spacing="1.5">INTACT</text>
+
+          <!-- intact row -->
+          <g>
+            <rect x="0"   y="28" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="14" y="50" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#1 genesis</text>
+            <text x="14" y="68" font-family="IBM Plex Mono" font-size="9" fill="currentColor" opacity=".7">prev 000000…</text>
+            <text x="14" y="82" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">hash 4f20c…</text>
+
+            <rect x="196" y="28" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="210" y="50" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#2</text>
+            <text x="210" y="68" font-family="IBM Plex Mono" font-size="9" fill="currentColor" opacity=".7">prev 4f20c…</text>
+            <text x="210" y="82" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">hash 616b3…</text>
+
+            <rect x="392" y="28" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="406" y="50" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#3</text>
+            <text x="406" y="68" font-family="IBM Plex Mono" font-size="9" fill="currentColor" opacity=".7">prev 616b3…</text>
+            <text x="406" y="82" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">hash fe7f0d…</text>
+
+            <rect x="588" y="28" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="602" y="50" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#4</text>
+            <text x="602" y="68" font-family="IBM Plex Mono" font-size="9" fill="currentColor" opacity=".7">prev fe7f0d…</text>
+            <text x="602" y="82" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">hash a6cc9…</text>
+
+            <line x1="150" y1="59" x2="190" y2="59" stroke="currentColor" stroke-width="1.2" marker-end="url(#c-head)"></line>
+            <line x1="346" y1="59" x2="386" y2="59" stroke="currentColor" stroke-width="1.2" marker-end="url(#c-head)"></line>
+            <line x1="542" y1="59" x2="582" y2="59" stroke="currentColor" stroke-width="1.2" marker-end="url(#c-head)"></line>
+          </g>
+
+          <text x="0" y="122" font-family="IBM Plex Mono" font-size="10" fill="currentColor" opacity=".8">
+            entry_hash = SHA256( canonical_json(fields) ‖ prev_hash )
+          </text>
+
+          <line x1="0" y1="142" x2="760" y2="142" stroke="currentColor" stroke-width="1" opacity=".25"></line>
+
+          <text x="0" y="172" font-family="IBM Plex Mono" font-size="10" fill="var(--crimson)" letter-spacing="1.5">
+            AFTER SOMEONE EDITS ENTRY #3 DIRECTLY IN THE DATABASE
+          </text>
+
+          <!-- tampered row -->
+          <g>
+            <rect x="0"   y="186" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="14" y="208" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#1</text>
+            <text x="14" y="228" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">verifies</text>
+
+            <rect x="196" y="186" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="210" y="208" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#2</text>
+            <text x="210" y="228" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">verifies</text>
+
+            <rect x="392" y="186" width="150" height="62" rx="2" fill="none" stroke="var(--crimson)" stroke-width="2.2"></rect>
+            <text x="406" y="206" font-family="IBM Plex Mono" font-size="11" fill="var(--crimson)">#3 edited</text>
+            <text x="406" y="222" font-family="IBM Plex Mono" font-size="9" fill="var(--crimson)">now hashes 25a10d…</text>
+            <text x="406" y="236" font-family="IBM Plex Mono" font-size="9" fill="var(--crimson)">log records fe7f0d…</text>
+
+            <rect x="588" y="186" width="150" height="62" rx="2" fill="none" stroke="var(--green)" stroke-width="1.3"></rect>
+            <text x="602" y="208" font-family="IBM Plex Mono" font-size="11" fill="currentColor">#4</text>
+            <text x="602" y="228" font-family="IBM Plex Mono" font-size="9" fill="var(--green)">verifies</text>
+
+            <line x1="150" y1="217" x2="190" y2="217" stroke="currentColor" stroke-width="1.2" marker-end="url(#c-head)"></line>
+            <line x1="346" y1="217" x2="386" y2="217" stroke="var(--crimson)" stroke-width="1.6" marker-end="url(#c-head)"></line>
+            <line x1="542" y1="217" x2="582" y2="217" stroke="currentColor" stroke-width="1.2" marker-end="url(#c-head)"></line>
+          </g>
+
+          <text x="0" y="282" font-family="IBM Plex Mono" font-size="10" fill="var(--crimson)">
+            BROKEN — first break at entry #3
+          </text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>The detection is positional, not vague.</b> Only the edited entry fails: entry #4 still
+        points at the value the log <em>records</em> for #3, so the report names #3 exactly rather
+        than saying the log is untrustworthy somewhere. The edit leaves no trace in the row — it
+        leaves one in the arithmetic.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ verification ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">04 &mdash; Checking</span>
+      <h2>Two questions, two different checks</h2>
+      <p>
+        These are easy to confuse and answer different things. Both write their outcome to the log —
+        <em>including when they fail</em>, because a tool that records only its successes is worse
+        than none.
+      </p>
+    </div>
+
+    <div class="panels">
+      <div class="panel disk">
+        <span class="catches">Did the file change?</span>
+        <h3>Re-hash the evidence</h3>
+        <p>
+          Reads the bytes back off disk — not the path, not a cached value — recomputes SHA-256 and
+          compares it to the digest recorded at intake. Run per item, per case, or across everything.
+        </p>
+        <p class="mono" style="color: var(--ink-faint); font-size:.76rem">coc verify --case 2026-100</p>
+      </div>
+
+      <div class="panel chain">
+        <span class="catches">Did the log change?</span>
+        <h3>Walk the chain</h3>
+        <p>
+          Recomputes every entry's hash, checks each points at its predecessor, and checks the
+          sequence has no gaps — which is what catches a <em>deleted</em> entry rather than an edited
+          one. Reports the first broken position.
+        </p>
+        <p class="mono" style="color: var(--ink-faint); font-size:.76rem">coc chain verify</p>
+      </div>
+    </div>
+
+    <figure>
+      <figcaption style="max-width:none">
+        <b>Exit codes carry the distinction too.</b> <code>0</code> success, <code>1</code> the command
+        failed, and <code>2</code> specifically an integrity failure — so a scheduled job can tell
+        “the tool broke” apart from “the evidence does not verify”.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ on disk ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">05 &mdash; Storage</span>
+      <h2>What is actually on your computer</h2>
+      <p>
+        Two things, in the workspace folder. They are one unit: the vault on its own is a pile of
+        anonymous blobs, because the name, the case and the custody history all live in the database.
+      </p>
+    </div>
+
+    <figure>
+      <div class="figure-scroll">
+        <svg viewBox="0 0 700 206" role="img"
+             aria-label="A workspace folder contains keeneye.sqlite holding records, and a vault folder holding file bytes named by their SHA-256 digest. The database maps digests back to filenames.">
+          <defs>
+            <marker id="s-head" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="var(--cyan)"></polygon>
+            </marker>
+          </defs>
+
+          <text x="0" y="16" font-family="IBM Plex Mono" font-size="10.5" fill="currentColor" opacity=".75">keeneye-work/</text>
+
+          <rect x="0" y="30" width="300" height="86" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"></rect>
+          <text x="16" y="54" font-family="IBM Plex Mono" font-size="11.5" fill="currentColor">keeneye.sqlite</text>
+          <text x="16" y="74" font-family="IBM Plex Sans" font-size="11" fill="currentColor" opacity=".8">cases · evidence · attachments</text>
+          <text x="16" y="92" font-family="IBM Plex Sans" font-size="11" fill="currentColor" opacity=".8">custody_log · users</text>
+          <text x="16" y="108" font-family="IBM Plex Sans" font-size="10.5" fill="var(--cyan)">the names and the history</text>
+
+          <rect x="384" y="30" width="316" height="86" rx="2" fill="none" stroke="var(--gold)" stroke-width="1.4"></rect>
+          <text x="400" y="54" font-family="IBM Plex Mono" font-size="11.5" fill="var(--gold)">vault/sha256/65/c2/65c2…e399</text>
+          <text x="400" y="74" font-family="IBM Plex Sans" font-size="11" fill="currentColor" opacity=".8">the bytes, named by digest</text>
+          <text x="400" y="92" font-family="IBM Plex Sans" font-size="11" fill="currentColor" opacity=".8">read-only · no extension</text>
+          <text x="400" y="108" font-family="IBM Plex Sans" font-size="10.5" fill="var(--gold)">anonymous without the database</text>
+
+          <line x1="300" y1="73" x2="378" y2="73" stroke="var(--cyan)" stroke-width="1.4" marker-end="url(#s-head)"></line>
+          <text x="304" y="65" font-family="IBM Plex Mono" font-size="9" fill="var(--cyan)">resolves</text>
+
+          <line x1="0" y1="150" x2="700" y2="150" stroke="currentColor" stroke-width="1" opacity=".2"></line>
+          <text x="0" y="176" font-family="IBM Plex Sans" font-size="11.5" fill="currentColor">
+            coc backup copies both together, then verifies the copy by walking its chain.
+          </text>
+          <text x="0" y="194" font-family="IBM Plex Sans" font-size="11" fill="currentColor" opacity=".7">
+            A backup nobody checked is not a backup.
+          </text>
+        </svg>
+      </div>
+      <figcaption>
+        <b>Lose the database and the bytes survive but mean nothing.</b> That is the single most
+        important operational consequence of storing files by digest, and the reason backup treats
+        the two as inseparable.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ defences ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">06 &mdash; Defences</span>
+      <h2>Three layers, catching different attackers</h2>
+    </div>
+
+    <div class="panels">
+      <div class="panel trigger">
+        <span class="catches">Catches the app</span>
+        <h3>Append-only triggers</h3>
+        <p>
+          The database aborts any <code>UPDATE</code> or <code>DELETE</code> against the custody log.
+          This constrains the application — including a careless change made to it next year. It is
+          not a security boundary: anyone with the file can drop a trigger in one line.
+        </p>
+      </div>
+
+      <div class="panel disk">
+        <span class="catches">Catches file edits</span>
+        <h3>Write-once vault</h3>
+        <p>
+          Content-addressed and read-only, so a modified file no longer matches the address it sits
+          at. Re-hashing finds it.
+        </p>
+      </div>
+
+      <div class="panel chain">
+        <span class="catches">Catches database edits</span>
+        <h3>The hash chain</h3>
+        <p>
+          The one that survives someone bypassing the application entirely — the case the triggers
+          cannot cover.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ limits ============ -->
+  <section>
+    <div class="section-head">
+      <span class="eyebrow">07 &mdash; Honestly</span>
+      <h2>What it does not do</h2>
+      <p>
+        Stated with the same weight as the defences, because a forensic tool that oversells itself is
+        worse than one that claims less.
+      </p>
+    </div>
+
+    <ul class="limits">
+      <li class="limits-head">Known gaps</li>
+      <li>
+        <b>A chain proves nothing was edited — not that nothing was removed from the end.</b>
+        <span>Truncate the log and the surviving prefix stays perfectly consistent. The court report
+        prints the chain head at the moment it was generated; a dated report that has left the
+        building is what makes a later truncation visible.</span>
+      </li>
+      <li>
+        <b>Entries are chained but not signed.</b>
+        <span>Anyone who can write to the database can append a <em>valid</em> new entry under any
+        username. Per-examiner signing keys would fix it and are not implemented.</span>
+      </li>
+      <li>
+        <b>Timestamps come from the machine, not an authority.</b>
+        <span>Source file times are claims the sending system made, and the log's own times come from
+        the server clock. Proving <em>when</em> needs a trusted timestamp authority.</span>
+      </li>
+      <li>
+        <b>There is no write blocker, and it has never been validated.</b>
+        <span>It hashes what it is given. If evidence was altered before it arrived, that altered
+        version is recorded as authoritative. “The tests pass” is not “validated for casework”.</span>
+      </li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>
+      KEENEYE — chain-of-custody tracker. Runs entirely on one machine; nothing is uploaded anywhere.
+      Full detail in <code>docs/DESIGN.md</code> (threat model) and <code>docs/STANDARDS.md</code>
+      (NIST SP 800-86, ISO/IEC 27037, SWGDE).
+    </p>
+  </footer>
+
+</div>
