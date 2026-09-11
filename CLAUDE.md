@@ -18,6 +18,7 @@ entry, add an `ACTION_*` constant in `service.py` — never a bare string.
 
 ```
 coc/hashing.py   chunked SHA-256 (+SHA-1, legacy interop only, never authoritative)
+coc/metadata.py  source file timestamps — CLAIMS not facts, always labelled as such
 coc/db.py        schema, FKs, WAL, triggers that ABORT update/delete on custody_log
 coc/chain.py     CHAINED_FIELDS (explicit — never hash dict(row)), entry_hash, verify()
 coc/storage.py   content-addressed write-once vault, 0444, filename is data never a path
@@ -25,6 +26,7 @@ coc/service.py   Workspace — THE ONLY WRITE PATH
 coc/auth.py      PBKDF2-HMAC-SHA256, 600k iterations, stdlib only
 coc/report.py    ReportLab court PDF; pins the chain head
 coc/cli.py       argparse; exit 2 == integrity failure (distinct from 1 == error)
+                 import (bulk, --dry-run first) · backup (VACUUM INTO + verifies the copy)
 coc/web/         app.py factory · api.py JSON · views.py files · security.py CSRF+CSP
 coc/web/static/js/  world.js (regions, camera) · scenes/{gate,vault,forge,web,ledger,seal}.js
 tests/           hashing chain storage service web cli report browser
@@ -64,6 +66,16 @@ a second canvas or a page navigation.
 - Workspace roots are `.resolve()`d — relative paths get re-resolved against Flask's `root_path` by
   `send_file`.
 
+## Schema
+
+`SCHEMA_VERSION = 2`. `db.migrate()` runs from `initialize()` off `PRAGMA user_version` and only ever
+**adds nullable columns** — v2 added `source_modified_at`, `source_created_at`, `source_reported_by`
+to `evidence` and `attachments`.
+
+Migrations must never touch `custody_log` or `chain.CHAINED_FIELDS`. New per-item data belongs in the
+log entry's `details_json`, which is *already* a hashed field — so it becomes tamper-evident for free
+and every chain written under an older version stays valid. That is how the timestamps were added.
+
 ## Environment (this sandbox)
 
 - **Higgsfield and Mobbin both require paid plans** — no generated assets exist, everything on screen
@@ -75,21 +87,21 @@ a second canvas or a page navigation.
 
 ## State
 
-Built, tested (108 passing), pushed to `claude/chain-of-custody-tracker-e0vnwm` @ `f2f41b1`.
+139 tests passing, on `claude/chain-of-custody-tracker-e0vnwm`.
 **Not merged — `main` is still the empty stub. User deferred the merge; don't merge unasked.**
+
+The user is now using this on **real internal/business records, local machine only**. Hosting, team
+deployment, signing and RFC-3161 timestamps were all explicitly deferred — do not build them unasked.
+The gitignore gap is **closed** (any directory mentioning case/evidence/exhibit, plus `private/` and
+`incoming/`); re-probe with `git check-ignore` before assuming.
 
 ### Next up
 
-1. Merge to `main` (clean fast-forward).
-2. **Real-case intake** — user will load genuine documents. Local only, never committed. Likely wants
-   a `coc import <folder>` bulk path.
-
-### Known gap to close before that
-
-`.gitignore` covers the vault, `*.sqlite*` and `.env`, but **not loose documents**. Verified today:
-`evidence/warrant.pdf` and `my-cases/scene-01.jpg` would both be committed. Add quarantine patterns
-(`private/`, `incoming/`, `cases/`, `evidence/`, `*-case/`) before any real material lands. Do **not**
-blanket-ignore `*.pdf`/`*.jpg` — `docs/screenshots/` is tracked.
+1. Merge to `main` (clean fast-forward) when asked.
+2. Team sharing — the user opened with it, then chose local-only. Needs a real server (gunicorn),
+   HTTPS, and `COC_COOKIE_SECURE=1`; `app.run()` is not for that. Examiner management already exists
+   in the Vault panel (admin only).
+3. Per-case access control, if more than one client's material ever shares a workspace.
 
 ## Commands
 

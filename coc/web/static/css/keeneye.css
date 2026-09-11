@@ -332,6 +332,15 @@ button.ghost:hover { color: var(--cyan); border-color: var(--edge-2); }
 .focus dl { display: grid; grid-template-columns: 82px 1fr; gap: 5px 10px; margin: 10px 0; font-size: 12px; }
 .focus dt { color: var(--slate); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; padding-top: 2px; }
 .focus dd { margin: 0; word-break: break-word; }
+/* Marks a value the source volunteered rather than one this tool verified. */
+.focus .claimed {
+  display: block;
+  font-size: 9px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--slate);
+}
+
 .focus code.full { font-size: 10.5px; color: var(--gold); word-break: break-all; }
 .focus h3 { margin: 0 0 2px; font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--bone); }
 
@@ -349,6 +358,15 @@ button.ghost:hover { color: var(--cyan); border-color: var(--edge-2); }
 }
 .thumbs a { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thumbs code { color: var(--slate); font-size: 9px; }
+
+.people { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 1px; background: var(--edge); }
+.people li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: rgba(4, 8, 18, .8); }
+.people li.inactive { opacity: .45; }
+.people .who { flex: 1; min-width: 0; }
+.people .who b { display: block; font-size: 12px; font-weight: 600; }
+.people .who span { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--slate); }
+.people .you { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); }
+button.small { padding: 5px 9px; font-size: 10px; }
 
 /* chain chip */
 

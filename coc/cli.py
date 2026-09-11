@@ -12,14 +12,17 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import mimetypes
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from coc import TOOL_NAME, __version__
+from coc import TOOL_NAME, __version__, chain, db
+from coc.hashing import hash_file
 from coc.report import build_case_report
-from coc.service import ServiceError, Workspace
+from coc.service import ServiceError, Workspace, utc_now
 from coc.storage import StorageError
 from coc.web.app import DEFAULT_WORKSPACE
 
@@ -219,6 +222,9 @@ def cmd_evidence_add(arguments, printer: Printer) -> int:
     printer.line(f"  file      {record['original_filename']}  ({int(record['byte_size']):,} bytes)")
     printer.line(f"  sha256    {record['sha256']}")
     printer.dim(f"  sha1      {record['sha1']}  (legacy interoperability only)")
+    if record["source_modified_at"]:
+        origin = "reported by browser" if record["source_reported_by"] == "browser" else "read from source"
+        printer.line(f"  modified  {record['source_modified_at']}  ({origin}, not verified)")
     printer.dim(f"  vault     {record['vault_path']}")
     printer.data(dict(record))
     return EXIT_OK
@@ -263,6 +269,120 @@ def cmd_attach(arguments, printer: Printer) -> int:
         printer.dim(f"  relates to {parent['item_number']}")
     printer.data(dict(record))
     return EXIT_OK
+
+
+def _walk(root: Path, recursive: bool) -> list[Path]:
+    """Files under ``root``, sorted, skipping hidden and system clutter."""
+    pattern = "**/*" if recursive else "*"
+    found = [
+        path for path in sorted(root.glob(pattern))
+        if path.is_file()
+        and not any(part.startswith(".") for part in path.relative_to(root).parts)
+        and path.name not in {"Thumbs.db", "desktop.ini", ".DS_Store"}
+    ]
+    return found
+
+
+def cmd_import(arguments, printer: Printer) -> int:
+    """Admit a folder of files in one pass.
+
+    Loading a real case one file at a time is not realistic, but a bulk import
+    that runs straight at a vault is not something to point at real documents
+    without looking first — hence ``--dry-run``, which hashes everything and
+    reports exactly what would happen while writing nothing.
+    """
+    workspace = _open(arguments)
+    actor = _require_actor(workspace, arguments)
+    case = workspace.get_case(arguments.case)
+    case_id = int(case["id"])
+
+    root = Path(arguments.folder).expanduser().resolve()
+    if not root.is_dir():
+        raise ServiceError(f"not a folder: {root}")
+
+    files = _walk(root, arguments.recursive)
+    if not files:
+        printer.warn(f"no files found under {root}")
+        return EXIT_OK
+
+    # Content already recorded for this case. Re-running an import should be a
+    # no-op, not a second set of item numbers pointing at the same bytes.
+    known = {
+        str(row["sha256"])
+        for row in workspace.list_evidence(case_id)
+    } | {
+        str(row["sha256"])
+        for row in workspace.list_attachments(case_id=case_id)
+    }
+
+    mode = arguments.mode
+    printer.line(
+        f"{'Would import' if arguments.dry_run else 'Importing'} {len(files)} file(s) "
+        f"from {root} into case {case['case_number']} as {mode}"
+    )
+    printer.line()
+
+    imported = skipped = failed = 0
+    for path in files:
+        relative = path.relative_to(root)
+        try:
+            digest = hash_file(path, with_sha1=False).sha256
+        except OSError as error:
+            printer.bad(f"  FAIL   {relative}  ({error})")
+            failed += 1
+            continue
+
+        if digest in known:
+            printer.dim(f"  skip   {relative}  (already in this case)")
+            skipped += 1
+            continue
+
+        if arguments.dry_run:
+            printer.line(f"  add    {relative}")
+            printer.dim(f"         {digest}  {path.stat().st_size:,} bytes")
+            known.add(digest)
+            imported += 1
+            continue
+
+        try:
+            if mode == "evidence":
+                record = workspace.ingest_evidence(
+                    case_id, path, actor,
+                    description=str(relative),
+                    source_device=arguments.source_device,
+                )
+                label = str(record["item_number"])
+            else:
+                record = workspace.attach(
+                    case_id, path, actor,
+                    evidence_id=arguments.evidence,
+                    kind=mode,
+                    caption=str(relative),
+                    mime_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                )
+                label = str(record["kind"])
+            printer.ok(f"  {label:<9} {relative}")
+            printer.dim(f"            {record['sha256']}")
+            known.add(digest)
+            imported += 1
+        except (ServiceError, StorageError, OSError) as error:
+            printer.bad(f"  FAIL   {relative}  ({error})")
+            failed += 1
+
+    printer.line()
+    verb = "would import" if arguments.dry_run else "imported"
+    printer.line(f"  {verb} {imported} · skipped {skipped} · failed {failed}")
+    if arguments.dry_run:
+        printer.warn("  dry run — nothing was written. Re-run without --dry-run to import.")
+    else:
+        chain_state = workspace.verify_chain()
+        printer.line(f"  chain {chain_state.status} · head {chain_state.head_hash}")
+
+    printer.data({
+        "imported": imported, "skipped": skipped, "failed": failed,
+        "dry_run": arguments.dry_run, "case": str(case["case_number"]),
+    })
+    return EXIT_ERROR if failed else EXIT_OK
 
 
 def cmd_verify(arguments, printer: Printer) -> int:
@@ -370,6 +490,134 @@ def cmd_report(arguments, printer: Printer) -> int:
     printer.dim("  The chain head is printed in section 2. Keep this document: it is what lets")
     printer.dim("  you show later that nothing was removed from the end of the log.")
     printer.data({"path": str(destination), "sha256": digest})
+    return EXIT_OK
+
+
+def cmd_backup(arguments, printer: Printer) -> int:
+    """Copy a workspace somewhere safe, then prove the copy is sound.
+
+    The database is snapshotted with ``VACUUM INTO`` rather than copied. Under
+    WAL, copying the ``.sqlite`` file alone can capture a torn state — the
+    committed data lives partly in the write-ahead log — and a backup that
+    restores to a corrupt database is worse than none, because it is trusted.
+
+    Vault files are immutable once written, so a plain copy of those is correct.
+
+    The copy is then verified by walking its custody chain. A backup nobody
+    checked is not a backup, so this exits non-zero if the copy does not verify.
+    """
+    workspace = _open(arguments)
+    destination = Path(arguments.out).expanduser().resolve()
+
+    # Backing a workspace up into itself would recurse and would not survive
+    # losing the disk it is on, which is the case this exists for.
+    if destination == workspace.root or workspace.root in destination.parents:
+        raise ServiceError(
+            f"refusing to back up into the live workspace ({workspace.root}) — "
+            "choose a location on different storage"
+        )
+    if destination.exists() and any(destination.iterdir()):
+        raise ServiceError(f"{destination} already exists and is not empty")
+
+    source_state = workspace.verify_chain()
+    if not source_state.ok:
+        printer.bad(f"the LIVE workspace chain is broken at entry {source_state.first_broken_seq}")
+        printer.warn("  backing it up anyway — a broken chain is itself worth preserving")
+
+    destination.mkdir(parents=True, exist_ok=True)
+    printer.line(f"backing up {workspace.root}")
+    printer.line(f"        to {destination}")
+    printer.line()
+
+    # 1. Consistent database snapshot.
+    backup_db = destination / db.DEFAULT_DB_FILENAME
+    workspace.connection.execute("VACUUM INTO ?", (str(backup_db),))
+    printer.ok(f"  database   {backup_db.stat().st_size:,} bytes")
+
+    # 2. The vault. Immutable files, so a straight copy is safe.
+    source_vault = workspace.vault.root
+    copied = total_bytes = 0
+    if source_vault.is_dir():
+        for source_file in source_vault.rglob("*"):
+            if not source_file.is_file() or ".staging" in source_file.parts:
+                continue
+            target = destination / "vault" / source_file.relative_to(source_vault)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, target)
+            copied += 1
+            total_bytes += target.stat().st_size
+    printer.ok(f"  vault      {copied:,} files, {total_bytes:,} bytes")
+
+    # 3. A manifest, so the backup describes itself.
+    statistics = workspace.statistics()
+    manifest = {
+        "tool": TOOL_NAME,
+        "tool_version": __version__,
+        "created_at": utc_now(),
+        "source_workspace": str(workspace.root),
+        "chain_head": source_state.head_hash,
+        "chain_status": source_state.status,
+        "custody_entries": source_state.entries_checked,
+        "cases": statistics["cases"],
+        "evidence": statistics["evidence"],
+        "attachments": statistics["attachments"],
+        "vault_files": copied,
+        "vault_bytes": total_bytes,
+    }
+    (destination / "MANIFEST.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    printer.ok("  manifest   MANIFEST.json")
+
+    # 4. Verify the copy, not the original.
+    printer.line()
+    printer.line("verifying the copy…")
+    copy_state = chain.verify(db.connect(backup_db))
+
+    # The question here is fidelity, not validity. If the live chain is already
+    # broken then a faithful copy is also broken — and that copy is exactly what
+    # you want, because the damaged log is itself the evidence. Refusing to back
+    # it up would destroy the thing worth preserving. So compare the copy to the
+    # source; only a divergence is a failure.
+    faithful = (
+        copy_state.head_hash == source_state.head_hash
+        and copy_state.ok == source_state.ok
+        and copy_state.entries_checked == source_state.entries_checked
+    )
+    if not faithful:
+        printer.bad("  the backup does NOT faithfully reproduce the source")
+        printer.bad(f"    source  {source_state.status}, {source_state.entries_checked} entries, "
+                    f"head {source_state.head_hash}")
+        printer.bad(f"    copy    {copy_state.status}, {copy_state.entries_checked} entries, "
+                    f"head {copy_state.head_hash}")
+        printer.data({"manifest": manifest, "verified": False})
+        return EXIT_INTEGRITY
+
+    if copy_state.ok:
+        printer.ok(f"  chain {copy_state.status} · {copy_state.entries_checked:,} entries · "
+                   f"head matches the source")
+    else:
+        printer.warn(f"  chain {copy_state.status} · faithfully copied, including the break at "
+                     f"entry {copy_state.first_broken_seq}")
+
+    if arguments.deep:
+        printer.line("  re-hashing every vaulted file in the copy…")
+        from coc.storage import Vault
+
+        copy_vault = Vault(destination / "vault")
+        bad = [
+            row["sha256"] for row in workspace.list_evidence()
+            if copy_vault.rehash(str(row["sha256"])).sha256 != str(row["sha256"])
+        ]
+        if bad:
+            printer.bad(f"  {len(bad)} file(s) did not survive the copy intact")
+            return EXIT_INTEGRITY
+        printer.ok("  every evidence file in the copy re-hashes correctly")
+
+    printer.line()
+    printer.ok("backup complete and verified")
+    printer.dim(f"  restore by pointing --workspace at {destination}")
+    printer.data({"manifest": manifest, "verified": True})
     return EXIT_OK
 
 
@@ -485,6 +733,20 @@ def build_parser() -> argparse.ArgumentParser:
     attach.add_argument("--mime", default="application/octet-stream")
     attach.set_defaults(func=cmd_attach)
 
+    importer = sub.add_parser(
+        "import", parents=[common], help="admit a whole folder of files at once")
+    importer.add_argument("folder")
+    importer.add_argument("--case", required=True)
+    importer.add_argument("--mode", default="evidence",
+                          choices=["evidence", "photo", "document", "raw", "other"])
+    importer.add_argument("--evidence", type=int,
+                          help="attach everything to this evidence item (non-evidence modes)")
+    importer.add_argument("--source-device", default="")
+    importer.add_argument("--recursive", action="store_true", help="descend into sub-folders")
+    importer.add_argument("--dry-run", action="store_true",
+                          help="hash and report what would happen, writing nothing")
+    importer.set_defaults(func=cmd_import)
+
     verify = sub.add_parser("verify", parents=[common], help="re-hash evidence and compare against intake")
     verify.add_argument("--case", help="verify every item in a case")
     verify.add_argument("--evidence", type=int, help="verify one item by id")
@@ -514,6 +776,13 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("case")
     report.add_argument("--out", help="output path")
     report.set_defaults(func=cmd_report)
+
+    backup = sub.add_parser(
+        "backup", parents=[common], help="copy the workspace somewhere safe and verify the copy")
+    backup.add_argument("--out", required=True, help="destination directory (must be empty)")
+    backup.add_argument("--deep", action="store_true",
+                        help="also re-hash every evidence file in the copy")
+    backup.set_defaults(func=cmd_backup)
 
     serve = sub.add_parser("serve", parents=[common], help="run the 3D web interface")
     serve.add_argument("--host", default="127.0.0.1")

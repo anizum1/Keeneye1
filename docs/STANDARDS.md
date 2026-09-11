@@ -43,7 +43,23 @@ timestamp generated server-side, the action, structured details, the hash-check 
 **`tool_name` and `tool_version`**. Tool identification is an explicit requirement and is easy to omit;
 it is written into the hashed portion of every entry, so it cannot be added retroactively.
 
-`coc/db.py` (schema), `coc/service.py` (`_log`).
+**Source file timestamps.** At intake the tool also records what the *source system* said about the
+file: its modification time, and its creation time where the platform keeps one. These are read once,
+before the file is vaulted, because the vault copy immediately has times of its own.
+
+They are recorded as **claims, not facts**, and labelled that way everywhere they appear — in the
+interface, in the PDF, and in the log. Anyone holding a file can set its timestamps (`touch -t`,
+`os.utime`, any file manager), so a source time is evidence of nothing on its own. Only the SHA-256
+attests to content. Files uploaded through the browser carry `File.lastModified`, which is weaker
+still — a value the client volunteered about a machine the server never saw — and is marked as
+browser-reported rather than read from a filesystem.
+
+The platform that produced the reading is stored alongside it, because `st_ctime` means *creation* on
+Windows and *inode change* on Unix. Reporting both as "created" would put a falsehood into a document
+someone relies on. Linux has no portable creation time at all, and the field is left empty rather
+than filled with something that looks like one.
+
+`coc/metadata.py`, `coc/db.py` (schema), `coc/service.py` (`_log`).
 
 ---
 
@@ -146,6 +162,8 @@ Stated plainly, because a forensic tool that oversells itself is worse than one 
   this and are not implemented.
 - **No external timestamping.** Timestamps come from the server's clock. A qualified timestamp
   authority (RFC 3161) would let you prove *when* an entry was made rather than only what it said.
+- **File timestamps are not verified.** See above: they are what the source claimed. A trusted
+  timestamp authority is what proves *when*, and there isn't one.
 - **No secure deletion, retention policy, or legal hold.**
 - **Single workspace, single machine.** No replication, no multi-site custody, no offline sync.
 - **Not accredited** to ISO/IEC 17025 or anything else, and not intended for real casework.

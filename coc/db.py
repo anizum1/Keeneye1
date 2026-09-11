@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DEFAULT_DB_FILENAME = "keeneye.sqlite"
 
@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS evidence (
     acquisition_date    TEXT    NOT NULL,
     acquired_by         INTEGER NOT NULL REFERENCES users(id),
     ingested_at         TEXT    NOT NULL,
+    -- Times the SOURCE system claimed, read once before vaulting. Claims, not
+    -- facts: see coc/metadata.py. NULL where the platform does not keep them.
+    source_modified_at  TEXT,
+    source_created_at   TEXT,
+    source_reported_by  TEXT,
     UNIQUE (case_id, item_number)
 );
 
@@ -77,7 +82,10 @@ CREATE TABLE IF NOT EXISTS attachments (
     vault_path          TEXT    NOT NULL,
     caption             TEXT    NOT NULL DEFAULT '',
     uploaded_by         INTEGER NOT NULL REFERENCES users(id),
-    uploaded_at         TEXT    NOT NULL
+    uploaded_at         TEXT    NOT NULL,
+    source_modified_at  TEXT,
+    source_created_at   TEXT,
+    source_reported_by  TEXT
 );
 
 -- Append-only.  See the module docstring and the triggers below.
@@ -139,13 +147,47 @@ def connect(db_path: str | Path, *, read_only: bool = False) -> sqlite3.Connecti
     return connection
 
 
+#: Columns added after v1. Only ever *added* — never changed or removed, because
+#: the custody chain is only compatible across versions if old data stays valid.
+_V2_COLUMNS = ("source_modified_at", "source_created_at", "source_reported_by")
+
+
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def migrate(connection: sqlite3.Connection) -> int:
+    """Bring an existing database up to the current schema version.
+
+    Only additive, nullable columns are added, so existing rows stay valid and —
+    critically — the custody chain is untouched. The chain hashes
+    ``chain.CHAINED_FIELDS`` on the custody_log table, which this never alters;
+    a schema change that invalidated historical chains would be catastrophic and
+    silent, so the migration is deliberately kept to something that cannot.
+
+    Returns the version migrated from.
+    """
+    was = schema_version(connection)
+
+    if was < 2:
+        for table in ("evidence", "attachments"):
+            existing = _columns(connection, table)
+            for column in _V2_COLUMNS:
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+
+    if was != SCHEMA_VERSION:
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    return was
+
+
 def initialize(db_path: str | Path) -> sqlite3.Connection:
-    """Create the database and schema if they do not already exist."""
+    """Create the database and schema if needed, and migrate an existing one."""
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = connect(db_path)
     connection.executescript(SCHEMA)
-    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    migrate(connection)
     return connection
 
 

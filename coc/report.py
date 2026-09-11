@@ -95,6 +95,19 @@ def _table(data: list[list[Any]], widths: list[float], *, mono_columns: tuple[in
     return table
 
 
+def _source_time(row: Any) -> str:
+    """The source-reported modification time, marked as a claim."""
+    # Bound first on purpose: `in` on a sqlite3.Row tests its *values*, not its
+    # column names, so the obvious `"col" in row` would silently be wrong.
+    columns = row.keys()
+    value = row["source_modified_at"] if "source_modified_at" in columns else None
+    if not value:
+        return "not recorded"
+    origin = row["source_reported_by"] if "source_reported_by" in columns else None
+    suffix = " (browser)" if origin == "browser" else ""
+    return f"{str(value).replace('T', ' ').replace('Z', '')}{suffix}"
+
+
 def _human_bytes(value: int) -> str:
     size = float(value)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -210,7 +223,9 @@ def build_case_report(
     # --- evidence inventory --------------------------------------------
     story.append(Paragraph("3. Evidence inventory", style["heading"]))
     if evidence:
-        rows: list[list[Any]] = [["Item", "Original filename", "Size", "SHA-256", "Acquired", "Holder"]]
+        rows: list[list[Any]] = [
+            ["Item", "Original filename", "Size", "SHA-256", "File modified", "Acquired", "Holder"]
+        ]
         for item in evidence:
             rows.append(
                 [
@@ -218,17 +233,22 @@ def build_case_report(
                     Paragraph(str(item["original_filename"]), style["body"]),
                     Paragraph(_human_bytes(int(item["byte_size"])), style["body"]),
                     Paragraph(_wrap_hash(str(item["sha256"])), style["mono"]),
+                    Paragraph(_source_time(item), style["body"]),
                     Paragraph(str(item["acquisition_date"]), style["body"]),
                     Paragraph(workspace.current_holder(int(item["id"])), style["body"]),
                 ]
             )
         story.append(
-            _table(rows, [0.7 * inch, 1.35 * inch, 0.7 * inch, 2.1 * inch, 0.85 * inch, 0.75 * inch])
+            _table(rows, [0.6 * inch, 1.15 * inch, 0.6 * inch, 1.85 * inch,
+                          1.0 * inch, 0.8 * inch, 0.75 * inch])
         )
         story.append(
             Paragraph(
                 "SHA-1 values are retained alongside SHA-256 for interoperability with legacy "
-                "tooling and are not relied upon for integrity determinations.",
+                "tooling and are not relied upon for integrity determinations. "
+                "<b>&ldquo;File modified&rdquo; is the timestamp reported by the system the file "
+                "arrived from, recorded at intake. It is not verified by this tool and can be set "
+                "arbitrarily at source; only the SHA-256 attests to content.</b>",
                 style["note"],
             )
         )

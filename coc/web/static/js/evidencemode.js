@@ -117,12 +117,14 @@ export function mountEvidenceMode({ api, reason = 'preference' }) {
       ${detail ? `
       <section>
         <h2>Evidence — ${escapeHtml(detail.case.case_number)}</h2>
-        ${table('Evidence items', ['Item', 'Filename', 'Size', 'SHA-256', 'Acquired', 'Holder'],
+        ${table('Evidence items. File times are as reported by the source, not verified.',
+          ['Item', 'Filename', 'Size', 'SHA-256', 'File modified', 'Acquired', 'Holder'],
           detail.evidence.map((item) => `<tr>
             <td>${escapeHtml(item.item_number)}</td>
             <td><a href="/files/evidence/${item.id}">${escapeHtml(item.original_filename)}</a></td>
             <td>${humanBytes(item.byte_size)}</td>
             <td><code>${escapeHtml(item.sha256)}</code></td>
+            <td>${item.source_modified_at ? formatStamp(item.source_modified_at) : '—'}</td>
             <td>${escapeHtml(item.acquisition_date)}</td>
             <td>${escapeHtml(item.holder ?? '—')}</td>
           </tr>`))}

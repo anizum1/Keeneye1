@@ -134,6 +134,70 @@ function caseOptions(selected) {
      </option>`).join('');
 }
 
+/**
+ * Admin-only examiner management.
+ *
+ * Accounts are deactivated, never deleted: every custody entry is attributed to
+ * a person, and removing the person would leave entries pointing at nobody.
+ */
+async function renderExaminers() {
+  const host = dom.panel.querySelector('#examiners');
+  if (!host) return;
+
+  try {
+    const { users } = await api.users();
+    host.innerHTML = `
+      <h3>Examiners</h3>
+      <ul class="people">
+        ${users.map((person) => `
+          <li class="${person.active ? '' : 'inactive'}">
+            <span class="who">
+              <b>${escapeHtml(person.full_name || person.username)}</b>
+              <span>${escapeHtml(person.username)} · ${escapeHtml(person.role)}${person.active ? '' : ' · inactive'}</span>
+            </span>
+            ${person.id === state.examiner.id ? '<span class="you">you</span>'
+              : `<button class="ghost small" data-user="${person.id}" data-active="${person.active ? '0' : '1'}">
+                   ${person.active ? 'Deactivate' : 'Restore'}
+                 </button>`}
+          </li>`).join('')}
+      </ul>
+      <form id="add-examiner" class="stack">
+        <input name="username" placeholder="Username" required spellcheck="false" autocomplete="off">
+        <input name="full_name" placeholder="Full name">
+        <select name="role"><option value="examiner">Examiner</option><option value="admin">Admin</option></select>
+        <input name="access_key" type="password" placeholder="Access key" required autocomplete="new-password">
+        <button type="submit">Add examiner</button>
+      </form>`;
+
+    host.querySelectorAll('[data-user]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          await api.setUserActive(Number(button.dataset.user), button.dataset.active === '1');
+          await renderExaminers();
+          toast('Examiner access updated and logged', 'ok');
+        } catch (error) {
+          toast(error.message, 'bad');
+          button.disabled = false;
+        }
+      });
+    });
+
+    host.querySelector('#add-examiner')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        const created = await api.addUser(Object.fromEntries(new FormData(event.target)));
+        toast(`${created.user.username} can now sign in`, 'ok');
+        await renderExaminers();
+      } catch (error) {
+        toast(error.message, 'bad');
+      }
+    });
+  } catch (error) {
+    host.innerHTML = `<p class="hint">Could not load examiners: ${escapeHtml(error.message)}</p>`;
+  }
+}
+
 function renderVaultPanel() {
   const stats = state.overview ?? {};
   setPanel(`
@@ -151,6 +215,7 @@ function renderVaultPanel() {
       ${formatStamp(stats.last_verification?.timestamp_utc) || 'never'}
       ${stats.last_verification?.result ? `(${escapeHtml(stats.last_verification.result)})` : ''}
     </p>
+    ${state.examiner?.role === 'admin' ? '<div id="examiners"></div>' : ''}
     <form id="new-case" class="stack">
       <h3>Open a case</h3>
       <input name="case_number" placeholder="Case number, e.g. 2026-014" required spellcheck="false">
@@ -158,6 +223,8 @@ function renderVaultPanel() {
       <input name="notes" placeholder="Notes (optional)">
       <button type="submit">Open case</button>
     </form>`);
+
+  if (state.examiner?.role === 'admin') renderExaminers();
 
   dom.panel.querySelector('#new-case')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -255,6 +322,7 @@ function renderWebPanel(selection) {
             <dt>SHA-256</dt><dd><code class="full">${escapeHtml(item.sha256)}</code></dd>
             <dt>Source</dt><dd>${escapeHtml(item.source_device || '—')}</dd>
             <dt>Acquired</dt><dd>${escapeHtml(item.acquisition_date)}</dd>
+            ${sourceTimeRows(item)}
             <dt>Holder</dt><dd>${escapeHtml(item.holder ?? '—')}</dd>
           </dl>
           ${supporting.length ? `<h4>Supporting material (${supporting.length})</h4>
@@ -298,6 +366,23 @@ function renderWebPanel(selection) {
     ${focus || '<p class="hint">Click any node to inspect it.</p>'}`);
 
   wireFocusActions();
+}
+
+/**
+ * The source file's own timestamps.
+ *
+ * Always labelled with where the value came from. These are claims made by the
+ * machine the file arrived from — trivially set with `touch` — so presenting
+ * them as plain facts alongside a verified hash would be misleading.
+ */
+function sourceTimeRows(record) {
+  if (!record.source_modified_at && !record.source_created_at) return '';
+  const origin = record.source_reported_by === 'browser' ? 'reported by browser' : 'read from source';
+  const row = (label, value) => (value
+    ? `<dt>${label}</dt><dd>${formatStamp(value)} <span class="claimed">${origin}</span></dd>`
+    : '');
+  return row('File modified', record.source_modified_at)
+       + row('File created', record.source_created_at);
 }
 
 function attachmentTile(attachment) {
@@ -490,6 +575,8 @@ async function admit(file, options) {
       payload = await api.ingest(caseId, file, {
         description: options.description,
         source_device: options.sourceDevice,
+        // The only trace of the original file's age that survives an upload.
+        last_modified: file.lastModified,
       }, handle.progress);
       handle.complete(payload.evidence);
       toast(`${payload.evidence.item_number} admitted · SHA-256 ${shortHash(payload.evidence.sha256, 6)}`, 'ok');
@@ -498,6 +585,7 @@ async function admit(file, options) {
         kind: options.mode,
         caption: options.description,
         evidence_id: options.evidenceId,
+        last_modified: file.lastModified,
       }, handle.progress);
       handle.complete(payload.attachment);
       toast(`${payload.attachment.original_filename} attached · SHA-256 ${shortHash(payload.attachment.sha256, 6)}`, 'ok');

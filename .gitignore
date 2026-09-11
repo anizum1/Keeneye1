@@ -19,3 +19,34 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+
+# ---------------------------------------------------------------------------
+# Real case material. THIS REPOSITORY IS PUBLIC.
+#
+# The rules above already cover the vault, the database and .env, but they do
+# not catch loose source documents — a folder of real files dropped anywhere
+# else would be committed. These are the names people actually reach for, plus
+# two explicit quarantine directories.
+#
+# Put anything real in private/ or incoming/, or keep it outside the repo.
+#
+# Deliberately NOT ignoring *.pdf / *.jpg wholesale: docs/screenshots/ is
+# tracked, and a rule that broad gets switched off the first time it is
+# inconvenient, which is worse than a narrower rule people trust.
+# ---------------------------------------------------------------------------
+private/
+incoming/
+
+# Any DIRECTORY whose name mentions a case, evidence or exhibits — the trailing
+# slash matters, so tracked files like evidencemode.js and 04-case-web.png are
+# unaffected. Broad on purpose: "cases", "my-cases", "casefile-2026-014" and
+# "case-2026-014" are all names a person actually types under pressure, and a
+# pattern that misses one is a pattern that leaks.
+*case*/
+*evidence*/
+*exhibit*/
+# Title-case variants. git is case-sensitive on Linux and macOS, and "Evidence"
+# is exactly what someone names a folder in Windows Explorer.
+*Case*/
+*Evidence*/
+*Exhibit*/

@@ -116,6 +116,9 @@ export const api = {
                  },
   verifyChain:  () => request('/api/chain/verify', { method: 'POST' }),
   users:        () => request('/api/users'),
+  addUser:      (payload) => request('/api/users', { method: 'POST', body: payload }),
+  setUserActive: (id, active) =>
+                   request(`/api/users/${id}`, { method: 'PATCH', body: { active } }),
 
   ingest:       (caseId, file, fields, onProgress) =>
                    upload(`/api/cases/${caseId}/evidence`, file, fields, onProgress),

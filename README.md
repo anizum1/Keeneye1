@@ -38,6 +38,29 @@ handling tools have no business shipping data anywhere.
 Want something to look at first? `python tools/seed_demo.py` builds a populated demo workspace
 (sign in as `kim`, access key `open-sesame-2026`), then `python -m coc serve --workspace workspace-demo`.
 
+### Using it on real files
+
+```bash
+# Look before you leap: hashes everything, writes nothing.
+python -m coc import ~/work/vendor-dispute --case 2026-100 --recursive --dry-run --as you
+
+# Then do it for real. Re-running skips anything already in the case.
+python -m coc import ~/work/vendor-dispute --case 2026-100 --recursive --as you
+
+# Copy the workspace somewhere else and verify the copy, not the original.
+python -m coc backup --out /mnt/backup/keeneye-2026-09-11 --deep
+```
+
+Intake records the **source file's own modification and creation times** alongside the hash, read
+before the file is vaulted. They are shown and printed as *reported by the source*, never as proven —
+anyone holding a file can set them, so only the SHA-256 attests to content. See
+[docs/STANDARDS.md](docs/STANDARDS.md).
+
+Keep real material out of the repository. `.gitignore` covers the vault, the database, `.env`, and any
+directory whose name mentions a case, evidence or exhibits — plus `private/` and `incoming/` as
+explicit quarantine. Better still, keep the workspace outside the repo entirely:
+`python -m coc --workspace ~/keeneye-work serve`.
+
 ### The same tool without a browser
 
 ```bash
@@ -48,6 +71,8 @@ python -m coc attach ./scene-01.jpg --case 2026-014 --evidence 1 --kind photo --
 python -m coc verify --case 2026-014 --as you      # re-hash and compare
 python -m coc chain verify                          # walk the whole log
 python -m coc report 2026-014 --as you              # the court PDF
+python -m coc import ./folder --case 2026-014 --as you --dry-run
+python -m coc backup --out ~/keeneye-backup --deep
 ```
 
 Both front-ends call the same service layer, so an action taken in the terminal appears in the 3D
@@ -179,7 +204,7 @@ no build step. `pip install -r requirements.txt` is the entire setup.
 ### Tests
 
 ```bash
-pytest -q          # 108 tests
+pytest -q          # 139 tests
 ruff check .
 ```
 

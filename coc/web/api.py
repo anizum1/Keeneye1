@@ -13,6 +13,7 @@ from typing import Any
 from flask import Blueprint, current_app, jsonify, request
 
 from coc import TOOL_NAME, __version__
+from coc.metadata import from_browser
 from coc.service import ServiceError, Workspace, rows_to_dicts
 from coc.storage import StorageError
 from coc.web.security import (
@@ -243,6 +244,9 @@ def ingest_evidence(case_id: int):
         description=request.form.get("description", ""),
         source_device=request.form.get("source_device", ""),
         acquisition_date=request.form.get("acquisition_date") or None,
+        # An upload has no path to stat, so the original file's age would be
+        # lost entirely. The browser reports it; recorded as the client's claim.
+        timestamps=from_browser(request.form.get("last_modified")),
     )
     return jsonify({"evidence": dict(item)}), 201
 
@@ -266,6 +270,7 @@ def upload_attachment(case_id: int):
         original_filename=upload.filename,
         mime_type=upload.mimetype or "application/octet-stream",
         total_size=request.content_length,
+        timestamps=from_browser(request.form.get("last_modified")),
     )
     return jsonify({"attachment": dict(attachment)}), 201
 
@@ -346,6 +351,18 @@ def verify_chain():
 # ----------------------------------------------------------------------
 # users
 # ----------------------------------------------------------------------
+
+
+@api.patch("/users/<int:user_id>")
+@admin_required
+def update_user(user_id: int):
+    """Activate or deactivate an examiner. Accounts are never deleted."""
+    data = _payload()
+    if "active" not in data:
+        return jsonify({"error": "invalid", "message": "Nothing to change."}), 400
+
+    examiner = workspace().set_user_active(user_id, bool(data["active"]), current_examiner())
+    return jsonify({"user": examiner.as_dict(), "active": bool(data["active"])})
 
 
 @api.get("/users")

@@ -23,6 +23,7 @@ from typing import Any, BinaryIO
 
 from coc import TOOL_NAME, __version__, auth, chain, db
 from coc.hashing import ProgressCallback
+from coc.metadata import SourceTimestamps, read_source_timestamps
 from coc.storage import StorageError, StoredFile, Vault
 
 # Every action the log can record.  Kept as constants so a typo becomes an
@@ -39,6 +40,8 @@ ACTION_CUSTODY_ACCEPTED = "custody_accepted"
 ACTION_REPORT_GENERATED = "report_generated"
 ACTION_USER_LOGIN = "user_login"
 ACTION_USER_CREATED = "user_created"
+ACTION_USER_DEACTIVATED = "user_deactivated"
+ACTION_USER_REACTIVATED = "user_reactivated"
 
 ATTACHMENT_KINDS = ("photo", "document", "raw", "other")
 
@@ -252,6 +255,43 @@ class Workspace:
             self._log(connection, ACTION_USER_LOGIN, examiner, details={"method": "access_key"})
         return examiner
 
+    def set_user_active(
+        self, user_id: int, active: bool, actor: auth.Examiner
+    ) -> auth.Examiner:
+        """Enable or disable an examiner's access.
+
+        Accounts are never deleted. A custody entry attributed to someone who no
+        longer exists would be an unresolvable gap in the record, so people who
+        leave are deactivated and their history stays intact and attributable.
+        """
+        target = self.get_user(user_id)
+        if target is None:
+            raise ServiceError(f"no such examiner: {user_id}")
+        if target.id == actor.id and not active:
+            raise ServiceError("you cannot deactivate your own account")
+
+        with db.immediate_transaction(self.connection) as connection:
+            if not active:
+                remaining = connection.execute(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1 AND id != ?",
+                    (user_id,),
+                ).fetchone()[0]
+                if target.is_admin and int(remaining) == 0:
+                    raise ServiceError(
+                        "this is the last active administrator — promote someone else first"
+                    )
+
+            connection.execute(
+                "UPDATE users SET active = ? WHERE id = ?", (1 if active else 0, user_id)
+            )
+            self._log(
+                connection,
+                ACTION_USER_REACTIVATED if active else ACTION_USER_DEACTIVATED,
+                actor,
+                details={"username": target.username, "role": target.role},
+            )
+        return target
+
     def get_user(self, user_id: int) -> auth.Examiner | None:
         return auth.examiner_from_row(
             self.connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -356,8 +396,13 @@ class Workspace:
         original_filename: str | None = None,
         progress: ProgressCallback | None = None,
     ) -> sqlite3.Row:
-        """Hash a file, admit it to the vault, and record it as evidence."""
+        """Hash a file, admit it to the vault, and record it as evidence.
+
+        The source file's own timestamps are read *before* it is vaulted: once
+        the copy exists it has times of its own and the original's are gone.
+        """
         source = Path(source)
+        timestamps = read_source_timestamps(source)
         stored = self.vault.store_file(source, progress=progress)
         return self._record_evidence(
             case_id,
@@ -368,6 +413,7 @@ class Workspace:
             source_device=source_device,
             acquisition_date=acquisition_date,
             original_filename=original_filename or source.name,
+            timestamps=timestamps,
         )
 
     def ingest_evidence_stream(
@@ -382,9 +428,14 @@ class Workspace:
         item_number: str | None = None,
         source_device: str = "",
         acquisition_date: str | None = None,
+        timestamps: SourceTimestamps | None = None,
         progress: ProgressCallback | None = None,
     ) -> sqlite3.Row:
-        """Same as :meth:`ingest_evidence` for an upload that has no path."""
+        """Same as :meth:`ingest_evidence` for an upload that has no path.
+
+        There is nothing to stat here, so ``timestamps`` carries whatever the
+        client volunteered — see :func:`coc.metadata.from_browser`.
+        """
         stored = self.vault.store_stream(stream, total_size=total_size, progress=progress)
         return self._record_evidence(
             case_id,
@@ -395,6 +446,7 @@ class Workspace:
             source_device=source_device,
             acquisition_date=acquisition_date,
             original_filename=original_filename,
+            timestamps=timestamps,
         )
 
     def _record_evidence(
@@ -408,9 +460,11 @@ class Workspace:
         source_device: str,
         acquisition_date: str | None,
         original_filename: str,
+        timestamps: SourceTimestamps | None = None,
     ) -> sqlite3.Row:
         acquired = acquisition_date or date.today().isoformat()
         now = utc_now()
+        times = timestamps or SourceTimestamps()
 
         with db.immediate_transaction(self.connection) as connection:
             if not connection.execute(
@@ -423,8 +477,9 @@ class Workspace:
                 """INSERT INTO evidence
                    (case_id, item_number, description, original_filename, byte_size,
                     sha256, sha1, vault_path, source_device, acquisition_date,
-                    acquired_by, ingested_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    acquired_by, ingested_at,
+                    source_modified_at, source_created_at, source_reported_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     case_id,
                     number,
@@ -438,6 +493,9 @@ class Workspace:
                     acquired,
                     actor.id,
                     now,
+                    times.modified_at,
+                    times.created_at,
+                    times.reported_by if not times.is_empty else None,
                 ),
             )
             evidence_id = int(cursor.lastrowid)
@@ -455,6 +513,10 @@ class Workspace:
                     "sha1": stored.digest.sha1,
                     "source_device": source_device,
                     "deduplicated": stored.deduplicated,
+                    # details_json is a hashed field, so recording the source
+                    # times here makes them tamper-evident for free — no change
+                    # to chain.CHAINED_FIELDS, so existing chains stay valid.
+                    **times.as_dict(),
                 },
                 hash_check_result="pass",
                 observed_sha256=stored.digest.sha256,
@@ -571,6 +633,7 @@ class Workspace:
         original_filename: str | None = None,
         mime_type: str = "application/octet-stream",
         total_size: int | None = None,
+        timestamps: SourceTimestamps | None = None,
         progress: ProgressCallback | None = None,
     ) -> sqlite3.Row:
         """Admit a supporting file — a scene photo, a warrant, a raw export.
@@ -584,6 +647,8 @@ class Workspace:
 
         if isinstance(source, (str, Path)):
             path = Path(source)
+            # Read before vaulting, for the same reason as evidence.
+            timestamps = timestamps or read_source_timestamps(path)
             stored = self.vault.store_file(path, progress=progress)
             filename = original_filename or path.name
         else:
@@ -591,6 +656,7 @@ class Workspace:
             filename = original_filename or "upload.bin"
 
         now = utc_now()
+        times = timestamps or SourceTimestamps()
         with db.immediate_transaction(self.connection) as connection:
             if not connection.execute(
                 "SELECT 1 FROM cases WHERE id = ?", (case_id,)
@@ -604,8 +670,9 @@ class Workspace:
             cursor = connection.execute(
                 """INSERT INTO attachments
                    (case_id, evidence_id, kind, original_filename, mime_type,
-                    byte_size, sha256, vault_path, caption, uploaded_by, uploaded_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    byte_size, sha256, vault_path, caption, uploaded_by, uploaded_at,
+                    source_modified_at, source_created_at, source_reported_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     case_id,
                     evidence_id,
@@ -618,6 +685,9 @@ class Workspace:
                     caption,
                     actor.id,
                     now,
+                    times.modified_at,
+                    times.created_at,
+                    times.reported_by if not times.is_empty else None,
                 ),
             )
             attachment_id = int(cursor.lastrowid)
@@ -635,6 +705,7 @@ class Workspace:
                     "byte_size": stored.byte_size,
                     "sha256": stored.digest.sha256,
                     "caption": caption,
+                    **times.as_dict(),
                 },
                 hash_check_result="pass",
                 observed_sha256=stored.digest.sha256,
