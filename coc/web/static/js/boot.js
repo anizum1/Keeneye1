@@ -13,7 +13,7 @@ import { GateScene } from './scenes/gate.js';
 import { VaultScene } from './scenes/vault.js';
 import { ForgeScene } from './scenes/forge.js';
 import { WebScene } from './scenes/web.js';
-import { LedgerScene } from './scenes/ledger.js';
+import { CATEGORIES, LedgerScene, categoryOf } from './scenes/ledger.js';
 import { SealScene } from './scenes/seal.js';
 import { mountEvidenceMode } from './evidencemode.js';
 import { escapeHtml, formatStamp, humanBytes, shortHash } from './util.js';
@@ -443,37 +443,98 @@ function wireFocusActions() {
   });
 }
 
-function renderLedgerPanel() {
+/**
+ * The ledger panel — the reading surface.
+ *
+ * The 3D column shows the shape of the chain; this shows what actually
+ * happened, as text an examiner can read and copy. Colours match the column
+ * exactly, so the two are one interface rather than two views.
+ */
+function renderLedgerPanel(entries = [], verification = null) {
+  const ok = verification?.ok !== false;
+  const broken = verification?.first_broken_seq ?? null;
+
+  // Newest first: "what happened to this case recently" is the usual question.
+  const ordered = [...entries].reverse();
+
+  const legend = Object.entries(CATEGORIES).map(([name, definition]) =>
+    `<span class="key"><i class="swatch ${name}"></i>${escapeHtml(definition.label)}</span>`).join('');
+
   setPanel(`
     <div class="panel-head">
       <h2>Ledger</h2>
-      <p>${state.activeCase ? 'Entries for the selected case.' : 'Every entry in the workspace.'}
-         Each block carries the hash of the one before it.</p>
+      <p>${state.activeCase ? 'Every action recorded for this case' : 'Every action in the workspace'},
+         newest first. Each entry carries the hash of the one before it.</p>
     </div>
+
+    <div class="verdict-strip ${ok ? 'ok' : 'bad'}">
+      <b>${ok ? 'CHAIN INTACT' : 'CHAIN BROKEN'}</b>
+      <span>${ok
+        ? `${(verification?.entries_checked ?? 0).toLocaleString()} entries verified`
+        : `first break at entry #${broken}`}</span>
+    </div>
+
     <div class="row">
-      <button id="run-verify">Run chain verification</button>
+      <button id="run-verify">Run verification</button>
       <button id="scope-toggle" class="ghost">${state.activeCase ? 'Show all cases' : 'Scope to case'}</button>
     </div>
-    <p class="hint">The pulse travels from the genesis block. If it stops, it stops exactly at the first
-       entry whose contents no longer hash to the value recorded in the chain.</p>`);
+
+    <div class="legend">${legend}</div>
+
+    <ol class="log">
+      ${ordered.map((entry) => {
+        const isBroken = broken !== null && entry.seq >= broken;
+        const failed = entry.hash_check_result === 'fail';
+        const category = categoryOf(entry.action);
+        const who = entry.details?.to && entry.details?.from
+          ? `${escapeHtml(entry.details.from)} → ${escapeHtml(entry.details.to)}`
+          : escapeHtml(entry.actor_username ?? '');
+        const what = entry.details?.item_number || entry.details?.original_filename
+          || entry.details?.case_number || entry.details?.username || '';
+        return `
+          <li class="${isBroken ? 'broken' : ''} ${failed ? 'failed' : ''}" data-seq="${entry.seq}">
+            <i class="swatch ${isBroken || failed ? 'alert' : category}"></i>
+            <div class="entry">
+              <div class="line">
+                <b>${escapeHtml(String(entry.action).replace(/_/g, ' '))}</b>
+                ${what ? `<span class="what">${escapeHtml(what)}</span>` : ''}
+                ${failed ? '<span class="flag">HASH MISMATCH</span>' : ''}
+                ${isBroken ? '<span class="flag">CHAIN BROKEN HERE</span>' : ''}
+              </div>
+              <div class="meta">#${entry.seq} · ${who} · ${formatStamp(entry.timestamp_utc)}</div>
+              <code>${shortHash(entry.prev_hash, 6)} → ${shortHash(entry.entry_hash, 6)}</code>
+            </div>
+          </li>`;
+      }).join('') || '<li class="empty">No entries yet.</li>'}
+    </ol>`);
+
+  // Clicking a row highlights the matching rung in the column.
+  dom.panel.querySelectorAll('.log li[data-seq]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const seq = Number(row.dataset.seq);
+      scenes.ledger.select(seq);
+      dom.panel.querySelectorAll('.log li').forEach((other) =>
+        other.classList.toggle('picked', other === row));
+    });
+  });
 
   dom.panel.querySelector('#run-verify')?.addEventListener('click', async (event) => {
     event.target.disabled = true;
     try {
-      const { verification } = await api.verifyChain();
-      scenes.ledger.runVerification(verification);
-      setChain(verification);
-      scenes.vault.setChain(verification, state.overview);
+      const { verification: result } = await api.verifyChain();
+      scenes.ledger.runVerification(result);
+      setChain(result);
+      scenes.vault.setChain(result, state.overview);
+      renderLedgerPanel(entries, result);
       toast(
-        verification.ok
-          ? `Chain intact — ${verification.entries_checked} entries verified`
-          : `CHAIN BROKEN at entry ${verification.first_broken_seq}: ${verification.reason}`,
-        verification.ok ? 'ok' : 'bad',
-        verification.ok ? 5000 : 15000,
+        result.ok
+          ? `Chain intact — ${result.entries_checked} entries verified`
+          : `CHAIN BROKEN at entry ${result.first_broken_seq}: ${result.reason}`,
+        result.ok ? 'ok' : 'bad',
+        result.ok ? 5000 : 15000,
       );
     } catch (error) {
       toast(error.message, 'bad');
-    } finally {
       event.target.disabled = false;
     }
   });
@@ -481,8 +542,8 @@ function renderLedgerPanel() {
   dom.panel.querySelector('#scope-toggle')?.addEventListener('click', async () => {
     state.activeCase = state.activeCase ? null : (state.cases[0]?.id ?? null);
     if (state.activeCase) await loadCase(state.activeCase);
-    await loadLedger();
-    renderLedgerPanel();
+    const payload = await loadLedger();
+    renderLedgerPanel(payload.entries, payload.verification);
   });
 }
 
@@ -546,8 +607,8 @@ async function goto(region, { immediate = false } = {}) {
     }
     if (region === 'ledger') {
       if (!state.cases.length) await refreshOverview();
-      await loadLedger();
-      renderLedgerPanel();
+      const payload = await loadLedger();
+      renderLedgerPanel(payload.entries, payload.verification);
     }
     if (region === 'seal') { if (!state.cases.length) await refreshOverview(); renderSealPanel(); }
   } catch (error) {
@@ -724,9 +785,10 @@ async function boot() {
   world.on('pick', async (hit) => {
     if (!hit) return;
     if (hit.id.startsWith('case:')) {
-      const id = Number(hit.id.split(':')[1]);
+      // Set the case and let goto() load it. Loading here as well would rebuild
+      // the whole graph twice for one click.
+      state.activeCase = Number(hit.id.split(':')[1]);
       try {
-        await loadCase(id);
         await goto('web');
         toast(`Opened ${state.caseDetail.case.case_number}`, 'info', 3000);
       } catch (error) {

@@ -76,13 +76,7 @@ export class VaultScene {
 
   /** Rebuild the orbiting case cores from an overview payload. */
   setCases(cases) {
-    for (const entry of this.cases) {
-      this.orbit.remove(entry.group);
-      entry.group.traverse((node) => {
-        node.geometry?.dispose?.();
-        if (node.material && node.material !== this.sharedMaterial) node.material.dispose?.();
-      });
-    }
+    for (const entry of this.cases) this.world.discard(entry.group);
     this.cases = [];
     this.pickable = [];
     this.empty.visible = cases.length === 0;

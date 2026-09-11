@@ -368,6 +368,62 @@ button.ghost:hover { color: var(--cyan); border-color: var(--edge-2); }
 .people .you { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); }
 button.small { padding: 5px 9px; font-size: 10px; }
 
+/* ---------------------------------------------------------------- *
+ * the ledger panel — the reading surface for the custody log
+ * ---------------------------------------------------------------- */
+
+.verdict-strip {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 10px 12px; margin-bottom: 12px;
+  border: 1px solid var(--edge); border-left-width: 3px;
+}
+.verdict-strip b { font-size: 12px; letter-spacing: .12em; }
+.verdict-strip span { font-size: 11px; color: var(--slate); }
+.verdict-strip.ok { border-left-color: var(--green); }
+.verdict-strip.ok b { color: var(--green); }
+.verdict-strip.bad { border-left-color: var(--crimson); }
+.verdict-strip.bad b { color: var(--crimson); }
+
+/* One legend, shared by the panel and the 3D column, so the colours mean the
+   same thing in both places. */
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 14px 0 10px; }
+.legend .key { display: flex; align-items: center; gap: 5px; font-size: 10px;
+               letter-spacing: .06em; text-transform: uppercase; color: var(--slate); }
+
+.swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; background: var(--slate); }
+.swatch.intake  { background: var(--gold); }
+.swatch.check   { background: var(--green); }
+.swatch.custody { background: var(--cyan); }
+.swatch.access  { background: var(--violet); }
+.swatch.admin   { background: var(--slate); }
+.swatch.alert   { background: var(--crimson); }
+
+.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; background: var(--edge); }
+.log li {
+  display: flex; gap: 9px; padding: 9px 10px;
+  background: rgba(4, 8, 18, .82); cursor: pointer;
+  transition: background .15s;
+}
+.log li:hover { background: rgba(0, 212, 255, .07); }
+.log li.picked { background: rgba(0, 212, 255, .14); box-shadow: inset 2px 0 0 var(--cyan); }
+.log li.broken { background: rgba(255, 45, 85, .12); }
+.log li.failed .flag, .log li.broken .flag { color: var(--crimson); }
+.log li.empty { color: var(--slate); font-size: 12px; cursor: default; }
+.log .swatch { margin-top: 4px; }
+
+.log .entry { min-width: 0; flex: 1; }
+.log .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.log .line b { font-size: 12px; font-weight: 600; text-transform: capitalize; }
+.log .what { font-size: 11px; color: var(--cyan); overflow: hidden; text-overflow: ellipsis; }
+.log .flag { font-size: 9px; letter-spacing: .1em; font-weight: 700; }
+.log .meta { font-size: 10px; color: var(--slate); margin-top: 2px; }
+.log code { display: block; font-size: 9.5px; color: var(--slate); margin-top: 3px; }
+
+/* 3D rung markers: short by design — the panel carries the detail. */
+.label3d.rung { font-size: 10px; opacity: .62; }
+.label3d.rung.selected { opacity: 1; }
+.label3d.rung.selected .tag-k { color: var(--cyan); }
+
 /* chain chip */
 
 .chip {

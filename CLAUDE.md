@@ -28,13 +28,17 @@ coc/report.py    ReportLab court PDF; pins the chain head
 coc/cli.py       argparse; exit 2 == integrity failure (distinct from 1 == error)
                  import (bulk, --dry-run first) · backup (VACUUM INTO + verifies the copy)
 coc/web/         app.py factory · api.py JSON · views.py files · security.py CSRF+CSP
-coc/web/static/js/  world.js (regions, camera) · scenes/{gate,vault,forge,web,ledger,seal}.js
+coc/web/static/js/  world.js (regions, camera, discard) · scenes/{gate,vault,forge,web,ledger,seal}.js
 tests/           hashing chain storage service web cli report browser
 tools/           tamper_demo.py · seed_demo.py · vendor_three.py
 ```
 
 3D regions are positions in **one** persistent `THREE.Scene`; navigating flies the camera. Never add
 a second canvas or a page navigation.
+
+**The 3D shows shape; the panel shows content.** Ledger rungs carry only `#seq`, attachment names
+appear on hover/selection, and the full log lives in the side panel as selectable text. Labels have
+no depth, so piling detail into the field just produces overlap.
 
 ## Conventions
 
@@ -57,6 +61,10 @@ a second canvas or a page navigation.
   into a grey wash over the *whole* frame.
 - **`CSS2DRenderer` ignores ancestor visibility.** Labels in a hidden group keep drawing. Region
   labels are scoped by three.js **layer**; camera enables only the active one.
+- **`CSS2DObject` only removes its DOM element on its OWN `removed` event.** Removing a parent group
+  never fires it, so labels pile up in the overlay on every rebuild and bleed across regions. Always
+  dispose through **`world.discard(object)`**, never `parent.remove()`. `world.labelCount` exists so
+  tests can assert the count stays flat.
 - **Camera flights use wall-clock**, not accumulated frame deltas. `dt` is clamped to 50 ms, which
   would otherwise stretch a 1.9 s flight to ten seconds on a slow renderer and strand two regions
   visible at once.
@@ -87,7 +95,7 @@ and every chain written under an older version stays valid. That is how the time
 
 ## State
 
-139 tests passing, on `claude/chain-of-custody-tracker-e0vnwm`.
+142 tests passing, on `claude/chain-of-custody-tracker-e0vnwm`.
 **Not merged — `main` is still the empty stub. User deferred the merge; don't merge unasked.**
 
 The user is now using this on **real internal/business records, local machine only**. Hosting, team

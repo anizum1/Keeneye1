@@ -77,6 +77,14 @@ export const humanBytes = (value) => {
   return `${unit === 0 ? size : size.toFixed(1)} ${units[unit]}`;
 };
 
+/** Shorten a long filename from the middle, keeping the extension visible. */
+export const truncate = (text, limit = 28) => {
+  const value = String(text ?? '');
+  if (value.length <= limit) return value;
+  const head = Math.ceil((limit - 1) / 2);
+  return `${value.slice(0, head)}…${value.slice(-(limit - head - 1))}`;
+};
+
 export const shortHash = (hex, span = 8) =>
   hex ? `${hex.slice(0, span)}…${hex.slice(-span)}` : '—';
 

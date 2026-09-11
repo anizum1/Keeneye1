@@ -237,7 +237,7 @@ def test_chain_verification_runs_a_pulse_down_the_ledger(page, server):
     page.wait_for_function("() => keeneye.world.current === 'ledger' && !keeneye.world.flight",
                            timeout=30_000)
 
-    assert page.evaluate("keeneye.scenes.ledger.blocks.length") > 0
+    assert page.evaluate("keeneye.scenes.ledger.rungs.length") > 0
 
     page.click("#run-verify")
     page.wait_for_function("() => keeneye.scenes.ledger.pulse !== null", timeout=30_000)
@@ -258,6 +258,81 @@ def test_the_case_web_links_every_node_to_the_case(page, server):
 
     groups = page.evaluate("[...new Set(keeneye.scenes.web.nodes.map(n => n.definition.group))]")
     assert "case" in groups and "evidence" in groups
+
+
+def test_reopening_a_case_does_not_pile_up_labels(page, server):
+    """The bug this exists for: clicking a case repeatedly stacked its labels.
+
+    CSS2DRenderer only removes a label's DOM element in response to that
+    label's own 'removed' event. Clearing a scene by removing the parent group
+    never fires it, so every rebuild left the previous labels in the overlay —
+    visible on every region, since the overlay covers the viewport.
+    """
+    _sign_in(page, server)
+    page.click("[data-goto='web']")
+    page.wait_for_function("() => keeneye.world.current === 'web' && !keeneye.world.flight",
+                           timeout=30_000)
+    page.wait_for_timeout(1_000)
+    baseline = page.evaluate("keeneye.world.labelCount")
+    assert baseline > 0
+
+    for _ in range(4):
+        page.evaluate("keeneye.scenes.web.setGraph(keeneye.scenes.web.lastPayload)"
+                      if page.evaluate("!!keeneye.scenes.web.lastPayload")
+                      else "keeneye.goto('web')")
+        page.wait_for_timeout(700)
+
+    after = page.evaluate("keeneye.world.labelCount")
+    assert after <= baseline, f"labels leaked: {baseline} -> {after}"
+    assert page.errors == []
+
+
+def test_switching_regions_leaves_no_stray_labels(page, server):
+    """Labels from one region must never be left drawn over another."""
+    _sign_in(page, server)
+    for region in ("forge", "web", "ledger", "vault", "web", "ledger"):
+        page.click(f"[data-goto='{region}']")
+        page.wait_for_function(
+            f"() => keeneye.world.current === '{region}' && !keeneye.world.flight", timeout=30_000)
+    page.wait_for_timeout(1_500)
+
+    # Every label element still in the overlay must belong to the active region.
+    stray = page.evaluate("""() => {
+      const layer = keeneye.world.regionLayers.get(keeneye.world.current);
+      let visible = 0, foreign = 0;
+      keeneye.world.scene.traverse((node) => {
+        if (!node.isCSS2DObject) return;
+        const shown = node.element?.isConnected && node.element.style.display !== 'none';
+        if (!shown) return;
+        visible += 1;
+        if (!node.layers.isEnabled(layer)) foreign += 1;
+      });
+      return { visible, foreign };
+    }""")
+    assert stray["foreign"] == 0, f"labels from other regions are drawn: {stray}"
+    assert page.errors == []
+
+
+def test_the_ledger_panel_lists_the_log_as_readable_text(page, server):
+    """The column shows shape; the panel has to carry the content."""
+    _sign_in(page, server)
+    page.click("[data-goto='ledger']")
+    page.wait_for_function("() => keeneye.world.current === 'ledger' && !keeneye.world.flight",
+                           timeout=30_000)
+    page.wait_for_selector(".log li[data-seq]", timeout=20_000)
+
+    rows = page.eval_on_selector_all(".log li[data-seq]", "els => els.length")
+    assert rows > 0
+    assert page.is_visible(".verdict-strip")
+    assert page.is_visible(".legend")
+
+    body = page.inner_text(".log")
+    assert "evidence ingested" in body.lower()
+
+    # Clicking a row selects the matching rung in the column.
+    page.click(".log li[data-seq]")
+    assert page.evaluate("keeneye.scenes.ledger.selected") is not None
+    assert page.errors == []
 
 
 def test_evidence_mode_renders_the_log_without_webgl(page, server):

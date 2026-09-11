@@ -1,204 +1,204 @@
 /**
- * The Ledger — the custody log as a physical chain.
+ * The Ledger — the custody log.
  *
- * Every entry is a block on a descending helix, carrying its timestamp and the
- * two hashes that bind it to its neighbours. Running a verification fires a
- * pulse of light down the chain from the genesis block: through an intact log
- * it travels the whole way and the head lights up, and at a broken link it
- * stops dead and the fracture opens.
+ * Deliberately the calmest scene in the application. An earlier version drew
+ * this as a swaying helix with a label on every block; it looked like more, and
+ * communicated less — an examiner could not read a hash off it or tell at a
+ * glance what had happened to a case.
  *
- * This is the scene that makes the tamper-evidence argument visible rather
- * than merely asserted.
+ * So the work is split. The 3D column shows the *shape* of the chain: one rung
+ * per entry, evenly spaced, colour-coded by what kind of action it was, with a
+ * verification pulse that travels down and stops dead at a fracture. The panel
+ * beside it holds the *content* — the full log as readable, selectable text.
+ * The colours are the same in both, so the two read as one thing.
  */
 
 import * as THREE from 'three';
 
 import { PALETTE } from '../palette.js';
 import { filamentMaterial, glow, metal, motes, tickAll } from '../materials.js';
-import { clamp, damp, formatStamp, shortHash, TAU } from '../util.js';
+import { clamp, damp, shortHash } from '../util.js';
 
-const RISE = 1.35;       // vertical spacing between blocks
-const SWAY = 4.2;        // how far the chain wanders side to side
-const DEPTH = 1.9;       // how far it wanders toward and away from the viewer
-const TWIST = 0.55;      // radians of wander per block
-const MAX_BLOCKS = 140;
+const RUNG_GAP = 1.05;        // vertical spacing between entries
+const COLUMN_HEIGHT = 26;     // how tall the column is allowed to be on screen
+const MAX_RUNGS = 160;
+const MAX_LABELS = 12;        // 3D labels are markers, not the reading surface
 
-/** How tall the helix is allowed to be on screen, in world units. */
-const FRAME_HEIGHT = 25;
+/**
+ * What kind of thing an entry is. Drives colour in both the column and the
+ * panel, so "gold means something entered the vault" is learnable once.
+ */
+export const CATEGORIES = {
+  intake:  { label: 'Evidence in',   colour: PALETTE.gold,
+             actions: ['evidence_ingested', 'attachment_uploaded'] },
+  check:   { label: 'Integrity check', colour: PALETTE.green,
+             actions: ['evidence_verified'] },
+  custody: { label: 'Custody',       colour: PALETTE.cyan,
+             actions: ['custody_transferred', 'custody_accepted'] },
+  access:  { label: 'Access',        colour: PALETTE.violet,
+             actions: ['evidence_viewed', 'evidence_downloaded'] },
+  admin:   { label: 'Case & people', colour: PALETTE.slate,
+             actions: ['case_opened', 'case_closed', 'report_generated',
+                       'user_created', 'user_login', 'user_deactivated', 'user_reactivated'] },
+};
 
-/** Labels are DOM and do not shrink with the helix, so they get thinned. */
-const MAX_LABELS = 16;
+export function categoryOf(action) {
+  for (const [name, definition] of Object.entries(CATEGORIES)) {
+    if (definition.actions.includes(action)) return name;
+  }
+  return 'admin';
+}
+
+/** Colour for one entry, accounting for failures and breaks. */
+export function colourFor(entry, broken) {
+  if (broken) return PALETTE.crimson;
+  if (entry.hash_check_result === 'fail') return PALETTE.crimson;
+  return CATEGORIES[categoryOf(entry.action)].colour;
+}
 
 export class LedgerScene {
   constructor() {
     this.pickable = [];
-    this.blocks = [];
+    this.rungs = [];
     this.pulse = null;
     this.verification = null;
+    this.selected = null;
   }
 
   build(group, world) {
     this.world = world;
     this.root = group;
 
-    this.helix = new THREE.Group();
-    group.add(this.helix);
+    this.column = new THREE.Group();
+    group.add(this.column);
 
-    group.add(motes(Math.round(240 * world.tier.particles), 26, PALETTE.green));
+    group.add(motes(Math.round(140 * world.tier.particles), 22, PALETTE.cyan));
+
+    // The spine every rung hangs from — this is the chain itself.
+    this.spine = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 1, 8),
+      glow(PALETTE.green, 0.5),
+    );
+    this.column.add(this.spine);
 
     this.thread = new THREE.LineSegments(
       new THREE.BufferGeometry(),
-      filamentMaterial({ colour: PALETTE.green, speed: 0.14, opacity: 0.55 }),
+      filamentMaterial({ colour: PALETTE.green, speed: 0.1, opacity: 0.4 }),
     );
     this.thread.frustumCulled = false;
-    this.helix.add(this.thread);
+    this.column.add(this.thread);
 
     this.header = world.label(
       '<b>Custody ledger</b><span class="tag-k">every action, hash-linked</span>',
       { className: 'tag big' },
     );
-    this.header.position.set(0, 18, 0);
     group.add(this.header);
 
     this.verdict = world.label('', { className: 'tag' });
-    this.verdict.position.set(0, 15, 0);
     group.add(this.verdict);
   }
 
   clear() {
-    for (const block of this.blocks) {
-      this.helix.remove(block.group);
-      block.group.traverse((child) => {
-        child.geometry?.dispose?.();
-        child.material?.dispose?.();
-      });
-    }
-    this.blocks = [];
+    for (const rung of this.rungs) this.world.discard(rung.group);
+    this.rungs = [];
     this.pickable = [];
   }
 
-  /** Rebuild the helix from a custody log and its verification result. */
+  /**
+   * Rebuild the column.
+   *
+   * Long logs are sampled, but the entries around a break are always kept: the
+   * fracture is the one thing that must never be summarised away.
+   */
   setEntries(entries, verification) {
     this.clear();
     this.verification = verification;
+    this.entries = entries ?? [];
 
-    // Long logs are sampled, but a broken entry is never sampled away.
-    const all = entries ?? [];
     const brokenSeq = verification?.first_broken_seq ?? null;
-    let shown = all;
-    if (all.length > MAX_BLOCKS) {
-      const stride = all.length / MAX_BLOCKS;
+    let shown = this.entries;
+    if (shown.length > MAX_RUNGS) {
+      const stride = shown.length / MAX_RUNGS;
       const picked = new Map();
-      for (let index = 0; index < MAX_BLOCKS; index += 1) {
-        const entry = all[Math.min(all.length - 1, Math.round(index * stride))];
+      for (let index = 0; index < MAX_RUNGS; index += 1) {
+        const entry = shown[Math.min(shown.length - 1, Math.round(index * stride))];
         picked.set(entry.seq, entry);
       }
-      for (const entry of all) {
-        if (brokenSeq !== null && entry.seq >= brokenSeq - 1 && entry.seq <= brokenSeq + 1) {
-          picked.set(entry.seq, entry);
-        }
+      for (const entry of this.entries) {
+        if (brokenSeq !== null && Math.abs(entry.seq - brokenSeq) <= 1) picked.set(entry.seq, entry);
       }
       shown = [...picked.values()].sort((a, b) => a.seq - b.seq);
     }
 
-    // Fit the helix to the frame rather than letting it run off into the fog,
-    // and thin the labels: they are DOM elements that do not scale with the
-    // geometry, so past a couple of dozen they stop being readable and start
-    // being a smear. Anything broken keeps its label regardless.
-    const span = Math.max((shown.length - 1) * RISE, 0.001);
-    const scale = Math.min(1, FRAME_HEIGHT / span);
+    const span = Math.max((shown.length - 1) * RUNG_GAP, 0.001);
+    const scale = Math.min(1, COLUMN_HEIGHT / span);
     const labelStep = Math.max(1, Math.ceil(shown.length / MAX_LABELS));
-    this.helix.scale.setScalar(scale);
-    this.helix.position.y = (span * scale) / 2;
+
+    this.column.scale.setScalar(scale);
+    this.column.position.y = (span * scale) / 2;
+    this.spine.scale.y = span + RUNG_GAP;
+    this.spine.position.y = -span / 2;
 
     const top = (span * scale) / 2;
-    this.header.position.set(0, top + 5.5, 0);
-    this.verdict.position.set(0, top + 2.6, 0);
+    this.header.position.set(0, top + 5.0, 0);
+    this.verdict.position.set(0, top + 2.4, 0);
 
     shown.forEach((entry, index) => {
       const broken = brokenSeq !== null && entry.seq >= brokenSeq;
-      const failed = entry.hash_check_result === 'fail';
-      const colour = broken ? PALETTE.crimson : failed ? PALETTE.gold : PALETTE.green;
+      const colour = colourFor(entry, broken);
 
-      // A descending chain that sways rather than a true helix. A helix looks
-      // better in a still, but half its blocks end up edge-on to the camera and
-      // an examiner cannot read a hash off a sliver. These stay face-on.
-      const angle = index * TWIST;
+      // A straight column, front-facing. No sway, no twist: every rung has to
+      // be readable from the same viewpoint.
       const holder = new THREE.Group();
-      holder.position.set(Math.sin(angle) * SWAY, -index * RISE, Math.cos(angle * 0.7) * DEPTH);
-      holder.rotation.y = Math.sin(angle) * 0.18;
+      holder.position.set(0, -index * RUNG_GAP, 0);
       holder.userData.pickId = `entry:${entry.seq}`;
 
-      const body = new THREE.Mesh(
-        new THREE.BoxGeometry(3.0, 0.86, 0.32),
-        metal(0x121a2c, { roughness: 0.4, metalness: 0.85 }),
-      );
-      holder.add(body);
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.16, 0.16), glow(colour, broken ? 2.0 : 0.9));
+      holder.add(bar);
 
-      const edge = new THREE.Mesh(
-        new THREE.BoxGeometry(3.1, 0.94, 0.26),
-        new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.26 }),
-      );
-      edge.position.z = -0.06;
-      holder.add(edge);
-
-      // The link to the previous block.
-      const shackle = new THREE.Mesh(
-        new THREE.TorusGeometry(0.26, 0.055, 8, 20),
-        glow(colour, broken ? 2.4 : 1.0),
-      );
-      shackle.position.set(0, 0.62, 0);
-      shackle.rotation.x = Math.PI / 2;
-      holder.add(shackle);
-
-      const worthLabelling =
-        broken || failed || index % labelStep === 0 || index === shown.length - 1;
-      if (worthLabelling) {
-        const label = this.world.label(
-          `<span class="tag-s">#${entry.seq}</span>
-           <b>${String(entry.action ?? '').replace(/_/g, ' ')}</b>
-           <span class="tag-k">${entry.actor_username ?? ''} · ${formatStamp(entry.timestamp_utc)}</span>
-           <code>${shortHash(entry.prev_hash, 5)} → ${shortHash(entry.entry_hash, 5)}</code>`,
-          { className: `tag entry ${broken ? 'bad' : failed ? 'warn' : ''}` },
-        );
-        // Alternating sides: two labelled blocks in a row would otherwise
-        // overlap wherever the chain sways back on itself.
-        const side = (index / labelStep) % 2 === 0 ? 1 : -1;
-        label.element.classList.add(side > 0 ? 'right' : 'left');
-        label.position.set(side * 3.4, 0, 0.5);
-        holder.add(label);
+      // A cap at each end, so a rung reads as a link rather than a tick.
+      for (const side of [-1, 1]) {
+        const cap = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), glow(colour, broken ? 2.2 : 1.1));
+        cap.position.x = side * 1.6;
+        holder.add(cap);
       }
 
-      this.helix.add(holder);
+      this.column.add(holder);
       this.pickable.push(holder);
-      this.blocks.push({ group: holder, entry, colour, broken, shackle, edge, index });
+      this.rungs.push({ group: holder, bar, entry, colour, broken, index });
+
+      if (index % labelStep === 0 || broken || index === shown.length - 1) {
+        // Just the sequence number. The action, the actor and the hashes are
+        // all in the panel; repeating them here only creates overlap, because
+        // consecutive rungs are closer together than two lines of text.
+        const label = this.world.label(
+          `<span class="tag-s">#${entry.seq}</span>`,
+          { className: `tag rung ${broken ? 'bad' : ''}` },
+        );
+        label.position.set(2.35, 0, 0);
+        holder.add(label);
+      }
     });
 
-    this._updateThread();
+    this._updateThread(span);
     this._updateVerdict();
   }
 
-  _updateThread() {
-    const SEGMENTS = 6;
-    const pairs = Math.max(this.blocks.length - 1, 0);
-    const count = pairs * SEGMENTS * 2;
-    const positions = new Float32Array(count * 3);
-    const spans = new Float32Array(count);
-    const offsets = new Float32Array(count);
+  _updateThread(span) {
+    const SEGMENTS = Math.max(this.rungs.length * 2, 2);
+    const positions = new Float32Array(SEGMENTS * 2 * 3);
+    const spans = new Float32Array(SEGMENTS * 2);
+    const offsets = new Float32Array(SEGMENTS * 2);
 
     let cursor = 0;
-    for (let index = 0; index < pairs; index += 1) {
-      const a = this.blocks[index].group.position;
-      const b = this.blocks[index + 1].group.position;
-      for (let segment = 0; segment < SEGMENTS; segment += 1) {
-        for (const t of [segment / SEGMENTS, (segment + 1) / SEGMENTS]) {
-          positions[cursor * 3]     = a.x + (b.x - a.x) * t;
-          positions[cursor * 3 + 1] = a.y + (b.y - a.y) * t;
-          positions[cursor * 3 + 2] = a.z + (b.z - a.z) * t;
-          spans[cursor] = (index + t) / Math.max(pairs, 1);
-          offsets[cursor] = 0;
-          cursor += 1;
-        }
+    for (let index = 0; index < SEGMENTS; index += 1) {
+      for (const t of [index / SEGMENTS, (index + 1) / SEGMENTS]) {
+        positions[cursor * 3] = 0;
+        positions[cursor * 3 + 1] = -t * span;
+        positions[cursor * 3 + 2] = 0.1;
+        spans[cursor] = t;
+        offsets[cursor] = 0;
+        cursor += 1;
       }
     }
 
@@ -217,74 +217,77 @@ export class LedgerScene {
     this.verdict.element.innerHTML = ok
       ? `<b>INTACT</b><span class="tag-k">${(result?.entries_checked ?? 0).toLocaleString()} entries verified</span>
          <code>head ${shortHash(result?.head_hash, 8)}</code>`
-      : `<b>BROKEN</b><span class="tag-k">${result?.reason ?? 'chain verification failed'}</span>`;
-    this.thread.material.uniforms.uColour.value.setHex(ok ? PALETTE.green : PALETTE.crimson);
+      : `<b>BROKEN</b><span class="tag-k">first break at entry ${result?.first_broken_seq}</span>`;
+
+    const colour = ok ? PALETTE.green : PALETTE.crimson;
+    this.thread.material.uniforms.uColour.value.setHex(colour);
+    this.spine.material.color.setHex(colour);
+    this.spine.material.emissive.setHex(colour);
   }
 
-  /**
-   * Fire the verification pulse.
-   *
-   * The pulse travels at a fixed rate down the chain and halts at the first
-   * broken link, which is the whole point: the examiner watches where it stops.
-   */
+  /** Highlight one entry — called when its row in the panel is clicked. */
+  select(seq) {
+    this.selected = seq;
+    for (const rung of this.rungs) {
+      const chosen = rung.entry.seq === seq;
+      rung.group.scale.setScalar(chosen ? 1.18 : 1);
+      rung.bar.material.emissiveIntensity = chosen ? 3.0 : (rung.broken ? 2.0 : 0.9);
+      rung.group.children.forEach((child) => {
+        if (child.element) child.element.classList.toggle('selected', chosen);
+      });
+    }
+  }
+
+  /** Fire the verification pulse from the genesis entry downward. */
   runVerification(verification) {
     this.verification = verification;
     const brokenIndex = verification?.first_broken_seq
-      ? this.blocks.findIndex((block) => block.entry.seq >= verification.first_broken_seq)
+      ? this.rungs.findIndex((rung) => rung.entry.seq >= verification.first_broken_seq)
       : -1;
 
     this.pulse = {
       position: -1,
-      stopAt: brokenIndex >= 0 ? brokenIndex : this.blocks.length,
+      stopAt: brokenIndex >= 0 ? brokenIndex : this.rungs.length,
       done: false,
       hold: 0,
     };
     this._updateVerdict();
-
-    for (const block of this.blocks) {
-      block.lit = 0;
-      block.shackle.material.emissiveIntensity = 0.4;
-    }
+    for (const rung of this.rungs) rung.bar.material.emissiveIntensity = 0.35;
   }
 
   update(dt, time, active) {
     tickAll(this.root, dt, time);
     this.thread.material.uniforms.uTime.value = time;
-    this.helix.rotation.y = Math.sin(time * 0.08) * 0.12;
 
-    for (const block of this.blocks) {
-      block.group.position.x += Math.sin(time * 0.7 + block.index) * dt * 0.06;
-      if (block.broken) {
-        block.shackle.rotation.z += dt * 3;
-        block.shackle.material.emissiveIntensity = 1.8 + Math.sin(time * 8) * 1.0;
-        // The fracture: a broken link is visibly pulled off the thread.
-        block.group.position.z += Math.sin(time * 5 + block.index) * dt * 0.3;
-      }
+    // A slow breath, and nothing more. The point of this scene is legibility.
+    this.column.rotation.y = Math.sin(time * 0.15) * 0.05;
+
+    for (const rung of this.rungs) {
+      if (!rung.broken) continue;
+      // A broken rung is visibly shaken loose from the spine.
+      rung.group.position.x = Math.sin(time * 9 + rung.index) * 0.12;
+      rung.bar.material.emissiveIntensity = 1.6 + Math.sin(time * 8) * 0.8;
     }
 
     const pulse = this.pulse;
     if (!pulse || pulse.done) return;
 
-    pulse.position += dt * 22;
+    pulse.position += dt * 26;
     const reached = Math.min(Math.floor(pulse.position), pulse.stopAt);
 
-    for (let index = 0; index <= reached && index < this.blocks.length; index += 1) {
-      const block = this.blocks[index];
+    for (let index = 0; index <= reached && index < this.rungs.length; index += 1) {
+      const rung = this.rungs[index];
       const distance = Math.abs(pulse.position - index);
-      const brightness = Math.max(0.6, 3.4 * Math.exp(-distance * 0.55));
-      block.shackle.material.emissiveIntensity = brightness;
-      block.edge.material.opacity = clamp(0.22 + Math.exp(-distance * 0.5) * 0.6, 0.22, 0.9);
+      rung.bar.material.emissiveIntensity = Math.max(0.9, 3.6 * Math.exp(-distance * 0.5));
     }
 
     if (pulse.position >= pulse.stopAt) {
       pulse.hold += dt;
-      if (pulse.stopAt < this.blocks.length) {
-        // Stopped at a fracture: hammer on it so it cannot be missed.
-        const block = this.blocks[pulse.stopAt];
-        block.shackle.material.emissiveIntensity = 2 + Math.sin(time * 18) * 1.8;
-        block.group.position.z += Math.sin(time * 22) * dt * 1.2;
+      if (pulse.stopAt < this.rungs.length) {
+        const rung = this.rungs[pulse.stopAt];
+        rung.bar.material.emissiveIntensity = 2.2 + Math.sin(time * 18) * 1.6;
       }
-      if (pulse.hold > 2.4) pulse.done = true;
+      if (pulse.hold > 2.2) pulse.done = true;
     }
   }
 }

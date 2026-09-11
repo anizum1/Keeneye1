@@ -17,7 +17,7 @@ import * as THREE from 'three';
 
 import { GROUP_COLOUR, PALETTE } from '../palette.js';
 import { filamentMaterial, glow, motes, tickAll } from '../materials.js';
-import { clamp, hashSeed, humanBytes, seededRandom, shortHash, TAU } from '../util.js';
+import { hashSeed, seededRandom, truncate, TAU } from '../util.js';
 
 /** The radius each kind of node settles onto. */
 const SHELL = { case: 0, evidence: 7.5, attachment: 13.5, examiner: 19 };
@@ -53,18 +53,12 @@ export class WebScene {
 
     this.title = world.label('<b>No case selected</b><span class="tag-k">choose one in the Vault</span>',
       { className: 'tag big' });
-    this.title.position.set(0, 17, 0);
+    this.title.position.set(0, SHELL.examiner + 7, 0);
     group.add(this.title);
   }
 
   clear() {
-    for (const node of this.nodes) {
-      this.field.remove(node.group);
-      node.group.traverse((child) => {
-        child.geometry?.dispose?.();
-        child.material?.dispose?.();
-      });
-    }
+    for (const node of this.nodes) this.world.discard(node.group);
     this.nodes = [];
     this.links = [];
     this.byId.clear();
@@ -74,6 +68,7 @@ export class WebScene {
   /** Lay out a case graph returned by /api/cases/<id>/graph. */
   setGraph(payload) {
     this.clear();
+    this.lastPayload = payload;
     this.caseId = payload?.case?.id ?? null;
 
     const record = payload?.case ?? {};
@@ -123,6 +118,11 @@ export class WebScene {
         className: `tag node ${definition.group}`,
       });
       label.position.set(0, size + 0.7, 0);
+      // Attachments are the numerous ones and they crowd the centre: a DOM
+      // label has no depth, so one sitting behind the case core still draws on
+      // top of it. Their names appear on hover or selection instead — the panel
+      // carries the detail either way.
+      if (definition.group === 'attachment') label.visible = false;
       holder.add(label);
 
       this.field.add(holder);
@@ -131,6 +131,7 @@ export class WebScene {
       const node = {
         id: definition.id,
         definition,
+        label,
         group: holder,
         core,
         shell,
@@ -152,6 +153,14 @@ export class WebScene {
     this._buildLineBuffers();
   }
 
+  /**
+   * Labels are kept short on purpose.
+   *
+   * Every node used to carry its filename, caption, hash and size — four lines
+   * each, which turns any real case into a wall of overlapping text around the
+   * centre. The panel already shows all of that for whatever is selected, so
+   * the field only needs enough to tell nodes apart.
+   */
   _labelFor(definition) {
     if (definition.group === 'case') {
       return `<b>${definition.label}</b><span class="tag-k">${definition.detail ?? ''}</span>`;
@@ -159,11 +168,11 @@ export class WebScene {
     if (definition.group === 'examiner') {
       return `<span class="tag-k">examiner</span><b>${definition.label}</b>`;
     }
-    const size = definition.byte_size ? humanBytes(definition.byte_size) : '';
-    return `<b>${definition.label}</b>
-            <span class="tag-k">${definition.detail || definition.kind || ''}</span>
-            <code>${shortHash(definition.sha256, 6)}</code>
-            <span class="tag-m">${size}</span>`;
+    if (definition.group === 'evidence') {
+      return `<b>${definition.label}</b><span class="tag-k">${definition.detail ?? ''}</span>`;
+    }
+    // Attachments are the most numerous and the least individually important.
+    return `<span class="tag-k">${truncate(definition.label, 26)}</span>`;
   }
 
   /**
@@ -224,10 +233,25 @@ export class WebScene {
     this.lineGeometry.attributes.position.needsUpdate = true;
   }
 
+  /** Reveal an attachment's name while the cursor is on it. */
+  _updateHover() {
+    const hit = this.world.pick();
+    const id = hit?.id ?? null;
+    if (id === this.hovered) return;
+    this.hovered = id;
+
+    for (const node of this.nodes) {
+      if (node.definition.group !== 'attachment') continue;
+      node.label.visible = node.id === id || node.id === this.selected;
+    }
+    this.world.labelsDirty = true;
+  }
+
   select(id) {
     this.selected = id;
     for (const node of this.nodes) {
       const chosen = node.id === id;
+      if (node.definition.group === 'attachment') node.label.visible = chosen;
       node.core.material.emissiveIntensity = chosen ? 3.2 : (node.definition.group === 'case' ? 1.6 : 1.2);
       node.group.userData.shell?.material.color.setHex(chosen ? PALETTE.bone : node.colour);
       node.group.children.forEach((child) => {
@@ -301,6 +325,7 @@ export class WebScene {
 
     this._simulate(dt, time);
     this._updateLines();
+    if (active) this._updateHover();
 
     this.field.rotation.y += dt * 0.035;
 

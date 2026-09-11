@@ -56,7 +56,7 @@ export const STATIONS = {
   vault:  { camera: new THREE.Vector3(0, 14, -36),     target: new THREE.Vector3(0, 3, -66) },
   forge:  { camera: new THREE.Vector3(-139, 5.5, -46), target: new THREE.Vector3(-140, 2.5, -72) },
   web:    { camera: new THREE.Vector3(126, 10, -44),   target: new THREE.Vector3(148, 4, -66) },
-  ledger: { camera: new THREE.Vector3(3, -52, -106),   target: new THREE.Vector3(0, -56, -142) },
+  ledger: { camera: new THREE.Vector3(0, -54, -108),   target: new THREE.Vector3(0, -56, -142) },
   seal:   { camera: new THREE.Vector3(0, 50.5, -112),  target: new THREE.Vector3(0, 48, -128) },
 };
 
@@ -326,6 +326,47 @@ export class World {
       const layer = name && this.regionLayers.get(name);
       if (layer) this.camera.layers.enable(layer);
     }
+  }
+
+  /**
+   * Remove an object from the scene and release everything it holds.
+   *
+   * The subtle part is the DOM labels. CSS2DRenderer appends each
+   * CSS2DObject's element to the overlay and only takes it back out in
+   * response to that object's own `removed` event — which fires when the label
+   * itself is detached from its parent, NOT when some ancestor group is. So
+   * removing a node group leaves its label elements in the overlay forever:
+   * they pile up on every rebuild and, because the overlay is fixed over the
+   * whole viewport, they bleed across every region.
+   *
+   * Always route disposal through here rather than calling parent.remove().
+   */
+  discard(object) {
+    if (!object) return;
+
+    const labels = [];
+    object.traverse((node) => {
+      if (node.isCSS2DObject) labels.push(node);
+    });
+    for (const label of labels) {
+      label.removeFromParent();   // fires 'removed' → the renderer drops the element
+      label.element?.remove();    // and belt-and-braces, in case it was already detached
+    }
+
+    object.traverse((node) => {
+      node.geometry?.dispose?.();
+      const material = node.material;
+      if (Array.isArray(material)) material.forEach((entry) => entry?.dispose?.());
+      else material?.dispose?.();
+    });
+
+    object.removeFromParent();
+    this.labelsDirty = true;
+  }
+
+  /** How many label elements are currently in the overlay. Used by tests. */
+  get labelCount() {
+    return this.labelRenderer.domElement.childElementCount;
   }
 
   // -- interaction -----------------------------------------------------
